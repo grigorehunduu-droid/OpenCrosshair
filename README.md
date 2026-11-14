@@ -5,9 +5,18 @@ of any game running in **borderless/windowed** mode. No ads, no telemetry, no ne
 
 ## Features
 
-- **Designer:** arm length, thickness, gap, T-style, center dot, circle, outline, color and opacity, with a live zoomed preview
+- **Designer** with a live zoomed preview:
+  - lines: 2 to 8 arms, length, thickness, gap, T-style
+  - center dot (square or round), circle or arc, shapes (chevron, triangle, square)
+  - a short text label under the crosshair
+  - color, opacity, outline, rotation (45° makes an X), blur
+- **Custom images:** use any PNG (transparency works) or **animated GIF** as your crosshair, scaled 10–400 %
+- **Animations:**
+  - **Shoot:** opens up when you left-click and eases back
+  - **Breathe**, **Blink**, **Rotate**, **Rainbow**, each with a speed setting
 - **Unlimited crosshairs:** save as many as you like and switch from the tray menu or with a hotkey
-- **Share codes:** copy a short code like `OC1:00FF00,100,6,2,3,0,0,0,1,1,1,000000` and import other people's
+- **Share codes:** copy a code (`OC2:…`) and import other people's. Codes include every setting except the image
+  file. Codes from version 1.0 (`OC1:…`) still import.
 - **PNG export** of any crosshair
 - **Multi-monitor:** pick the display; nudge the crosshair pixel by pixel, remembered per display
 - **Hide while aiming:** optionally hides the crosshair while the right mouse button is held
@@ -46,6 +55,10 @@ Everything is stored in `%APPDATA%\OpenCrosshair\settings.json`. If that file is
 - **Anti-cheat and game rules:** OpenCrosshair only draws a transparent window on top of your screen. It doesn't read
   or modify game memory or inject anything into games. Some games or tournaments still don't allow crosshair
   overlays, so check the rules of what you play. Use at your own risk.
+- **Shoot animation** reacts to every left click, including clicks outside games. It only checks whether the button
+  is down (no mouse hook) and intercepts nothing.
+- **Images:** files up to 10 MB, shrunk to fit 512 px. Animated GIFs play up to 60 frames.
+- **Labels:** emoji aren't supported.
 - English only.
 
 ## Build from source

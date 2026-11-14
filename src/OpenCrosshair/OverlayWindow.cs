@@ -30,10 +30,12 @@ internal sealed class OverlayWindow : Form
         }
     }
 
-    /// <summary>Shows <paramref name="image"/> centered on <paramref name="screen"/> plus an offset. Takes ownership of the bitmap.</summary>
+    /// <summary>
+    /// Shows <paramref name="image"/> centered on <paramref name="screen"/> plus an offset.
+    /// The caller owns the bitmap and must keep it alive until the next SetImage.
+    /// </summary>
     public void SetImage(Bitmap image, byte alpha, Rectangle screen, Point offset)
     {
-        _image?.Dispose();
         _image = image;
         _alpha = alpha;
         int half = image.Width / 2;
@@ -78,11 +80,5 @@ internal sealed class OverlayWindow : Form
         if (IsHandleCreated && Visible)
             Native.SetWindowPos(Handle, Native.HWND_TOPMOST, 0, 0, 0, 0,
                 Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
-    }
-
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing) _image?.Dispose();
-        base.Dispose(disposing);
     }
 }

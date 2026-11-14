@@ -7,7 +7,7 @@ internal static class Native
     public const int WS_EX_TOPMOST = 0x8, WS_EX_TRANSPARENT = 0x20, WS_EX_TOOLWINDOW = 0x80,
         WS_EX_LAYERED = 0x80000, WS_EX_NOACTIVATE = 0x8000000;
     public const uint SWP_NOSIZE = 0x1, SWP_NOMOVE = 0x2, SWP_NOACTIVATE = 0x10;
-    public const int WM_HOTKEY = 0x312, VK_RBUTTON = 0x02, ULW_ALPHA = 0x2;
+    public const int WM_HOTKEY = 0x312, VK_LBUTTON = 0x01, VK_RBUTTON = 0x02, ULW_ALPHA = 0x2;
     public const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_WIN = 0x8, MOD_NOREPEAT = 0x4000;
     public static readonly IntPtr HWND_TOPMOST = new(-1);
 

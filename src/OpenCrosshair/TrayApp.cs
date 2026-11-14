@@ -12,6 +12,13 @@ internal sealed class TrayApp : ApplicationContext
     private readonly HotkeyManager _hotkeys = new();
     private readonly System.Windows.Forms.Timer _onTopTimer = new() { Interval = 500 };
     private readonly System.Windows.Forms.Timer _aimTimer = new() { Interval = 15 };
+    private readonly System.Windows.Forms.Timer _animationTimer = new() { Interval = 33 };   // ~30 fps
+    private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+    private List<Bitmap> _stills = [];   // current crosshair (several for a GIF), re-rendered only when settings change
+    private List<int> _delaysMs = [];
+    private bool _drawn;                 // drawn crosshair rather than a custom image
+    private Bitmap? _frame;              // last animation frame, when the animation changes pixels
+    private double _lastShot = double.NegativeInfinity;
     private DesignerForm? _designer;
     private bool _aiming;
 
@@ -31,6 +38,7 @@ internal sealed class TrayApp : ApplicationContext
         _onTopTimer.Start();
         _aimTimer.Tick += (_, _) => CheckAiming();
         _aimTimer.Enabled = _s.HideWhileAiming;
+        _animationTimer.Tick += (_, _) => { if (_overlay.Visible) ShowFrame(); };
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         RegisterHotkeys();
     }
@@ -40,10 +48,45 @@ internal sealed class TrayApp : ApplicationContext
 
     private void Redraw()
     {
+        var old = _stills;
+        var image = CrosshairRenderer.LoadImageFrames(_s.Active);
+        _drawn = image is null;
+        (_stills, _delaysMs) = image ?? ([CrosshairRenderer.Draw(_s.Active)], [0]);
+        _animationTimer.Enabled = _s.Active.Animation != CrosshairAnimation.None || _stills.Count > 1;
+        ShowFrame();
+        foreach (var bitmap in old) bitmap.Dispose();   // only after the overlay has switched to the new bitmaps
+    }
+
+    private Bitmap CurrentStill(double ms)
+    {
+        if (_stills.Count == 1) return _stills[0];
+        double t = ms % _delaysMs.Sum();
+        for (int i = 0; i < _stills.Count; i++)
+            if ((t -= _delaysMs[i]) < 0) return _stills[i];
+        return _stills[^1];
+    }
+
+    private void ShowFrame()
+    {
+        var s = _s.Active;
+        double seconds = _clock.Elapsed.TotalSeconds, phase = CrosshairAnimator.Phase(s, seconds);
+        var still = CurrentStill(seconds * 1000);
+        Bitmap? next;
+        if (s.Animation == CrosshairAnimation.Shoot)
+        {
+            // Polls the button state; no mouse hook, nothing is intercepted.
+            if ((Native.GetAsyncKeyState(Native.VK_LBUTTON) & 0x8000) != 0) _lastShot = seconds;
+            next = CrosshairAnimator.Shoot(still, s, CrosshairAnimator.Spread(s, seconds - _lastShot), _drawn);
+        }
+        else next = CrosshairAnimator.Frame(still, s, phase);
+
+        var oldFrame = _frame;
+        _frame = next;
         var screen = SelectedScreen();
         var off = _s.Offsets.GetValueOrDefault(screen.DeviceName) ?? new Offset(0, 0);
-        byte alpha = (byte)(_s.Active.OpacityPercent * 255 / 100);
-        _overlay.SetImage(CrosshairRenderer.Render(_s.Active), alpha, screen.Bounds, new Point(off.X, off.Y));
+        byte alpha = (byte)Math.Round(s.OpacityPercent * 2.55 * CrosshairAnimator.Opacity(s, phase));
+        _overlay.SetImage(_frame ?? still, alpha, screen.Bounds, new Point(off.X, off.Y));
+        oldFrame?.Dispose();
     }
 
     private void Save()
@@ -183,7 +226,7 @@ internal sealed class TrayApp : ApplicationContext
 
     private static Icon MakeTrayIcon()
     {
-        using var mark = CrosshairRenderer.Render(new CrosshairStyle { Length = 6, Thickness = 3, Gap = 3, DotSize = 3 });
+        using var mark = CrosshairRenderer.Draw(new CrosshairStyle { Length = 6, Thickness = 3, Gap = 3, DotSize = 3 });
         using var canvas = new Bitmap(32, 32);
         using (var g = Graphics.FromImage(canvas))
             g.DrawImage(mark, (32 - mark.Width) / 2, (32 - mark.Height) / 2, mark.Width, mark.Height);
@@ -197,11 +240,14 @@ internal sealed class TrayApp : ApplicationContext
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         _onTopTimer.Dispose();
         _aimTimer.Dispose();
+        _animationTimer.Dispose();
         _hotkeys.Dispose();
         _tray.Visible = false;
         _tray.Dispose();
         _designer?.Close();
         _overlay.Close();
+        _frame?.Dispose();
+        foreach (var bitmap in _stills) bitmap.Dispose();
         Save();
         base.ExitThreadCore();
     }

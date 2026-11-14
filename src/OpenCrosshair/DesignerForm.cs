@@ -152,7 +152,9 @@ internal sealed class DesignerForm : Form
 
     private void DrawPreview(object? sender, PaintEventArgs e)
     {
-        using var bmp = CrosshairRenderer.Render(_s.Active);
+        var s = _s.Active;
+        var image = CrosshairRenderer.LoadImage(s);
+        using var bmp = image ?? CrosshairRenderer.Draw(s);
         int zoom = Math.Clamp(Math.Min(_preview.Width, _preview.Height) / bmp.Width, 1, 8);
         int size = bmp.Width * zoom;
         var dest = new Rectangle((_preview.Width - size) / 2, (_preview.Height - size) / 2, size, size);
@@ -161,7 +163,10 @@ internal sealed class DesignerForm : Form
         e.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
         e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
         e.Graphics.DrawImage(bmp, dest, 0, 0, bmp.Width, bmp.Height, GraphicsUnit.Pixel, attributes);
-        TextRenderer.DrawText(e.Graphics, $"{zoom}× zoom", Font, new Point(8, 8), Color.Gainsboro);
+        var note = $"{zoom}× zoom";
+        if (s.ImagePath is not null && image is null) note += "  ·  image not found or unreadable, showing the drawn crosshair";
+        if (s.Animation != CrosshairAnimation.None) note += $"  ·  {s.Animation} plays on screen";
+        TextRenderer.DrawText(e.Graphics, note, Font, new Point(8, 8), Color.Gainsboro);
     }
 
     private static Button Button(string text, Action onClick)
