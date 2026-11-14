@@ -32,7 +32,7 @@ Download one file from [Releases](../../releases) and run it. Nothing gets insta
 | File | For |
 |---|---|
 | `OpenCrosshair.exe` | Most PCs (Windows 10/11, 64-bit). Everything included, about 50 MB. |
-| `OpenCrosshair-small.exe` | Same app, about 1 MB, if you have the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0). Windows offers to download it if it's missing. |
+| `OpenCrosshair-small.exe` | Same app, about 250 KB, if you have the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0). Windows offers to download it if it's missing. |
 | `OpenCrosshair-arm64.exe` | Windows on ARM laptops (e.g. Snapdragon). |
 
 The app lives in the system tray (by the clock): double-click the icon to customize, right-click for options.
