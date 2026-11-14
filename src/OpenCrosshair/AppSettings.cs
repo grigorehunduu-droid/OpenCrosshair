@@ -6,6 +6,11 @@ namespace OpenCrosshair;
 
 internal sealed record Offset(int X, int Y);
 
+/// <summary>Mouse button that hides the crosshair while held. Values are the Windows virtual-key codes.</summary>
+internal enum AimButton { Right = 0x02, Middle = 0x04, Back = 0x05, Forward = 0x06 }
+
+internal enum AppTheme { Dark, Light, System }
+
 /// <summary>Everything the app remembers, stored as JSON in %APPDATA%\OpenCrosshair\settings.json.</summary>
 internal sealed class AppSettings
 {
@@ -17,6 +22,8 @@ internal sealed class AppSettings
     public Dictionary<string, Offset> Offsets { get; set; } = new();
     public bool Visible { get; set; } = true;
     public bool HideWhileAiming { get; set; }
+    [JsonConverter(typeof(JsonStringEnumConverter<AimButton>))] public AimButton AimButton { get; set; } = AimButton.Right;
+    [JsonConverter(typeof(JsonStringEnumConverter<AppTheme>))] public AppTheme Theme { get; set; } = AppTheme.Dark;
     public Dictionary<string, string> Hotkeys { get; set; } = new(DefaultHotkeys);
 
     public static readonly IReadOnlyDictionary<string, string> DefaultHotkeys = new Dictionary<string, string>
@@ -71,6 +78,8 @@ internal sealed class AppSettings
         ActiveProfile = Math.Clamp(ActiveProfile, 0, Profiles.Count - 1);
         Offsets ??= new();
         Hotkeys ??= new();
+        if (!Enum.IsDefined(AimButton)) AimButton = AimButton.Right;
+        if (!Enum.IsDefined(Theme)) Theme = AppTheme.Dark;
         foreach (var (name, combo) in DefaultHotkeys) Hotkeys.TryAdd(name, combo);
     }
 }

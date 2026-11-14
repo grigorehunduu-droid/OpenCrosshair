@@ -27,8 +27,9 @@ internal static class CrosshairRenderer
     /// </summary>
     public static (List<Bitmap> Frames, List<int> DelaysMs)? LoadImageFrames(CrosshairStyle s)
     {
-        const long maxFileBytes = 10 * 1024 * 1024;
-        const int maxFrames = 60;   // shortcut: longer GIFs are cut at 60 frames to bound memory; raise if needed
+        const long maxFileBytes = 25 * 1024 * 1024;
+        const int maxFrames = 300;
+        const long maxPixels = 32L * 1024 * 1024;   // all frames together stay under ~128 MB of memory
         if (s.ImagePath is null) return null;
         try
         {
@@ -43,6 +44,7 @@ internal static class CrosshairRenderer
             var delaysMs = new List<int>(count);
             for (int i = 0; i < count; i++)
             {
+                if (i > 0 && (long)(i + 1) * frames[0].Width * frames[0].Height > maxPixels) break;   // very long or large GIFs are cut short
                 if (animated) image.SelectActiveFrame(FrameDimension.Time, i);
                 frames.Add(Finish(Fit(image, s.ImageScalePercent / 100.0), s, image: true));
                 int d = delays is { } v && v.Length >= 4 * (i + 1) ? BitConverter.ToInt32(v, 4 * i) * 10 : 100;
@@ -58,7 +60,7 @@ internal static class CrosshairRenderer
 
     private static Bitmap Fit(Image image, double scale)
     {
-        const int maxSide = 512;   // shortcut: big images are shrunk to fit 512 px; raise if anyone needs bigger
+        const int maxSide = 1024;   // bigger images are shrunk to fit; a crosshair never needs more
         scale = Math.Min(scale, (double)maxSide / Math.Max(image.Width, image.Height));
         int w = Math.Max(1, (int)Math.Round(image.Width * scale)), h = Math.Max(1, (int)Math.Round(image.Height * scale));
         int side = Math.Max(w, h) + 1 & ~1;   // round up to even so the center lands on a pixel corner
@@ -272,12 +274,43 @@ internal static class CrosshairAnimator
     };
 
     /// <summary>A new frame for animations that change pixels; null when the still image can be reused.</summary>
-    public static Bitmap? Frame(Bitmap still, CrosshairStyle s, double phase) => s.Animation switch
+    public static Bitmap? Frame(Bitmap still, CrosshairStyle s, double phase, bool drawn) => s.Animation switch
     {
         CrosshairAnimation.Rotate => Rotate(still, 360 * phase),
+        // A drawn crosshair is redrawn in rainbow colors (works for white too); an image's hues are shifted instead.
+        CrosshairAnimation.Rainbow when drawn => RedrawInColor(s, Hue(360 * phase)),
         CrosshairAnimation.Rainbow => HueRotate(still, 360 * phase),
         _ => null,
     };
+
+    /// <summary>Index of the GIF frame showing at <paramref name="ms"/>, looping forever.</summary>
+    public static int FrameIndex(IReadOnlyList<int> delaysMs, double ms)
+    {
+        if (delaysMs.Count <= 1) return 0;
+        double t = ms % delaysMs.Sum();
+        for (int i = 0; i < delaysMs.Count; i++)
+            if ((t -= delaysMs[i]) < 0) return i;
+        return delaysMs.Count - 1;
+    }
+
+    /// <summary>Fully saturated color at <paramref name="degrees"/> on the color wheel (0 red, 120 green, 240 blue).</summary>
+    public static Color Hue(double degrees)
+    {
+        double h = (degrees % 360 + 360) % 360 / 60;
+        double x = 1 - Math.Abs(h % 2 - 1);
+        var (r, g, b) = (int)h switch
+        {
+            0 => (1d, x, 0d), 1 => (x, 1d, 0d), 2 => (0d, 1d, x), 3 => (0d, x, 1d), 4 => (x, 0d, 1d), _ => (1d, 0d, x),
+        };
+        return Color.FromArgb(255, (int)Math.Round(r * 255), (int)Math.Round(g * 255), (int)Math.Round(b * 255));
+    }
+
+    private static Bitmap RedrawInColor(CrosshairStyle s, Color color)
+    {
+        var copy = s.Clone();
+        copy.Color = color;
+        return CrosshairRenderer.Draw(copy);
+    }
 
     /// <summary>Shoot animation: 1 right after a left click, easing back to 0 (speed 1 = 1.2 s, 10 = 0.12 s).</summary>
     public static double Spread(CrosshairStyle s, double secondsSinceShot)

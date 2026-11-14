@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace OpenCrosshair.Tests;
 
 public class ShareCodeTests
@@ -192,6 +194,44 @@ public class ImageTests
     }
 
     [Fact]
+    public void PlaysARealAnimatedGif()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".gif");
+        GifWriter.Write(path, 4, 4, [(Color.Red, 10), (Color.Blue, 30)]);   // delays in 1/100 s
+        var loaded = CrosshairRenderer.LoadImageFrames(new CrosshairStyle { ImagePath = path });
+        try
+        {
+            Assert.NotNull(loaded);
+            var (frames, delays) = loaded.Value;
+            Assert.Equal(2, frames.Count);
+            Assert.Equal([100, 300], delays);
+            Assert.Equal(Color.Red.ToArgb(), frames[0].GetPixel(2, 2).ToArgb());
+            Assert.Equal(Color.Blue.ToArgb(), frames[1].GetPixel(2, 2).ToArgb());
+            using var sprite = new CrosshairSprite(new CrosshairStyle { ImagePath = path });
+            Assert.True(sprite.IsAnimated);
+            Assert.False(sprite.ImageMissing);
+        }
+        finally
+        {
+            foreach (var frame in loaded?.Frames ?? []) frame.Dispose();
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void BigImagesAreShrunkToFit1024Pixels()
+    {
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".png");
+        try
+        {
+            using (var src = new Bitmap(1500, 10)) src.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            using var bmp = CrosshairRenderer.Render(new CrosshairStyle { ImagePath = path });
+            Assert.Equal(1024, bmp.Width);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void MissingImageFallsBackToTheDrawnCrosshair()
     {
         var s = new CrosshairStyle { ImagePath = @"C:\does\not\exist.png", Outline = false };
@@ -232,8 +272,8 @@ public class AnimationTests
     {
         var s = new CrosshairStyle { Animation = CrosshairAnimation.Rotate, TStyle = true, Length = 8, Gap = 3, Outline = false };
         using var still = CrosshairRenderer.Draw(s);
-        using var start = CrosshairAnimator.Frame(still, s, 0)!;
-        using var quarter = CrosshairAnimator.Frame(still, s, 0.25)!;
+        using var start = CrosshairAnimator.Frame(still, s, 0, drawn: true)!;
+        using var quarter = CrosshairAnimator.Frame(still, s, 0.25, drawn: true)!;
         Assert.Equal(start.Size, quarter.Size);
         int c = quarter.Width / 2;
         Assert.Equal(0, start.GetPixel(c, c - 7).A);      // T-style: no top arm
@@ -246,9 +286,37 @@ public class AnimationTests
     {
         var s = new CrosshairStyle { Animation = CrosshairAnimation.Rainbow, Color = Color.Red, Outline = false };
         using var still = CrosshairRenderer.Draw(s);
-        using var frame = CrosshairAnimator.Frame(still, s, 1 / 3.0)!;   // 120°: red becomes green
+        using var frame = CrosshairAnimator.Frame(still, s, 1 / 3.0, drawn: false)!;   // image path: hues shift, 120° turns red green
         var p = frame.GetPixel(frame.Width / 2 + 4, frame.Height / 2);
         Assert.True(p.G > p.R && p.G > p.B);
+    }
+
+    [Fact]
+    public void RainbowRecolorsAWhiteDrawnCrosshair()
+    {
+        var s = new CrosshairStyle { Animation = CrosshairAnimation.Rainbow, Color = Color.White, Outline = false };
+        using var still = CrosshairRenderer.Draw(s);
+        using var frame = CrosshairAnimator.Frame(still, s, 2 / 3.0, drawn: true)!;   // 240° = blue
+        Assert.Equal(Color.FromArgb(255, 0, 0, 255).ToArgb(), frame.GetPixel(frame.Width / 2 + 4, frame.Height / 2).ToArgb());
+    }
+
+    [Theory]
+    [InlineData(0, 255, 0, 0)]
+    [InlineData(120, 0, 255, 0)]
+    [InlineData(240, 0, 0, 255)]
+    [InlineData(60, 255, 255, 0)]
+    [InlineData(-120, 0, 0, 255)]
+    public void HueGivesPureColors(double degrees, int r, int g, int b) =>
+        Assert.Equal(Color.FromArgb(255, r, g, b).ToArgb(), CrosshairAnimator.Hue(degrees).ToArgb());
+
+    [Fact]
+    public void FrameIndexFollowsGifDelaysAndLoops()
+    {
+        int[] delays = [100, 300];
+        Assert.Equal(0, CrosshairAnimator.FrameIndex(delays, 50));
+        Assert.Equal(1, CrosshairAnimator.FrameIndex(delays, 150));
+        Assert.Equal(0, CrosshairAnimator.FrameIndex(delays, 450));   // 450 ms = 50 ms into the second loop
+        Assert.Equal(0, CrosshairAnimator.FrameIndex([0], 999));
     }
 
     [Fact]
@@ -270,7 +338,7 @@ public class AnimationTests
     public void SettingsReadEnumsByName()
     {
         // Settings store enums by name; adding values must not break existing files.
-        var json = """{ "Profiles": [ { "Animation": "Rainbow", "Shape": "Square" } ] }""";
+        var json = """{ "Profiles": [ { "Animation": "Rainbow", "Shape": "Square" } ], "AimButton": "Back" }""";
         var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".json");
         try
         {
@@ -278,8 +346,53 @@ public class AnimationTests
             var s = AppSettings.Load(path);
             Assert.Equal(CrosshairAnimation.Rainbow, s.Active.Animation);
             Assert.Equal(CrosshairShape.Square, s.Active.Shape);
+            Assert.Equal(AimButton.Back, s.AimButton);
+            Assert.Equal(AimButton.Right, AppSettings.Load(path + ".missing").AimButton);   // default for new and 1.x files
         }
         finally { File.Delete(path); }
+    }
+}
+
+/// <summary>
+/// Writes a tiny animated GIF so the GIF path can be tested with a real file (System.Drawing can't save one).
+/// 4-color palette, one solid color per frame, "uncompressed" LZW: a clear code before every 2 pixels keeps codes 3 bits wide.
+/// </summary>
+internal static class GifWriter
+{
+    public static void Write(string path, int width, int height, (Color Color, int DelayCs)[] frames)
+    {
+        Color[] palette = [Color.Black, Color.Red, Color.Blue, Color.Lime];
+        using var f = new BinaryWriter(File.Create(path));
+        f.Write("GIF89a"u8);
+        f.Write((ushort)width); f.Write((ushort)height);
+        f.Write((byte)0x91); f.Write((byte)0); f.Write((byte)0);   // global palette with 4 entries
+        foreach (var c in palette) { f.Write(c.R); f.Write(c.G); f.Write(c.B); }
+        f.Write([0x21, 0xFF, 11]); f.Write("NETSCAPE2.0"u8); f.Write([3, 1, 0, 0, 0]);   // loop forever
+        foreach (var (color, delay) in frames)
+        {
+            byte index = (byte)Array.FindIndex(palette, p => p.ToArgb() == color.ToArgb());
+            f.Write([0x21, 0xF9, 4, 0x08]); f.Write((ushort)delay); f.Write([0, 0]);   // graphic control: delay
+            f.Write((byte)0x2C); f.Write((ushort)0); f.Write((ushort)0); f.Write((ushort)width); f.Write((ushort)height); f.Write((byte)0);
+            f.Write((byte)2);   // LZW minimum code size; codes 4 = clear, 5 = end
+            var bits = new List<bool>();
+            void Code(int c) { for (int b = 0; b < 3; b++) bits.Add((c >> b & 1) == 1); }
+            for (int p = 0; p < width * height; p++)
+            {
+                if (p % 2 == 0) Code(4);
+                Code(index);
+            }
+            Code(5);
+            var data = new byte[(bits.Count + 7) / 8];
+            for (int i = 0; i < bits.Count; i++) if (bits[i]) data[i / 8] |= (byte)(1 << (i % 8));
+            for (int i = 0; i < data.Length; i += 255)
+            {
+                int n = Math.Min(255, data.Length - i);
+                f.Write((byte)n);
+                f.Write(data, i, n);
+            }
+            f.Write((byte)0);
+        }
+        f.Write((byte)0x3B);
     }
 }
 
@@ -308,30 +421,154 @@ public class HotkeyTests
 
 public class DesignerTests
 {
-    [Fact]
-    public void OpensAndEditsWithoutErrors()
+    /// <summary>WinForms needs an STA thread; xUnit runs tests on MTA threads.</summary>
+    internal static void RunSta(Action test)
     {
         Exception? failure = null;
         var thread = new Thread(() =>
         {
-            try
-            {
-                var s = new AppSettings();
-                int changes = 0;
-                using var form = new DesignerForm(s, () => changes++);
-                form.CreateControl();
-                s.Profiles.Add(new CrosshairStyle { Name = "Second" });
-                s.ActiveProfile = 1;
-                form.SyncFromSettings();
-                Assert.Equal(0, changes);   // syncing from outside must not echo a change back
-            }
+            try { test(); }
             catch (Exception e) { failure = e; }
         });
-        thread.SetApartmentState(ApartmentState.STA);   // WinForms needs an STA thread
+        thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         thread.Join();
-        Assert.Null(failure);
+        if (failure is not null) throw new Exception("Failed on the STA thread", failure);
     }
+
+    private static T Find<T>(Form form, string name) where T : Control => form.Controls.Find(name, true).OfType<T>().Single();
+
+    [Fact]
+    public void SyncingFromOutsideDoesNotEchoAChange() => RunSta(() =>
+    {
+        var s = new AppSettings();
+        int changes = 0;
+        using var form = new DesignerForm(s, () => changes++);
+        form.CreateControl();
+        s.Profiles.Add(new CrosshairStyle { Name = "Second", Gap = 9 });
+        s.ActiveProfile = 1;
+        form.SyncFromSettings();
+        Assert.Equal(0, changes);
+        Assert.Equal(9, Find<NumericUpDown>(form, "Gap").Value);   // controls show the newly active crosshair
+    });
+
+    [Fact]
+    public void ControlsChangeTheCrosshair() => RunSta(() =>
+    {
+        var s = new AppSettings();
+        int changes = 0;
+        using var form = new DesignerForm(s, () => changes++);
+        form.CreateControl();
+
+        var gap = Find<NumericUpDown>(form, "Gap");
+        Assert.Equal(3, gap.Value);
+        gap.Value = 7;
+        Assert.Equal(7, s.Active.Gap);
+        Assert.Equal(1, changes);
+        Assert.Equal(7, Find<TrackBar>(form, "GapSlider").Value);   // slider and number box stay in step
+
+        Find<TrackBar>(form, "LengthSlider").Value = 20;
+        Assert.Equal(20, s.Active.Length);
+
+        Find<CheckBox>(form, "RoundDot").Checked = true;
+        Assert.True(s.Active.RoundDot);
+
+        Find<ComboBox>(form, "Animation").SelectedIndex = 1;
+        Assert.Equal(CrosshairAnimation.Shoot, s.Active.Animation);
+
+        Find<TextBox>(form, "Name").Text = "Sniper";
+        Assert.Equal("Sniper", s.Active.Name);
+    });
+
+    [Fact]
+    public void PresetsAddANamedCrosshair() => RunSta(() =>
+    {
+        var s = new AppSettings();
+        using var form = new DesignerForm(s, () => { });
+        form.CreateControl();
+        var presets = Find<ComboBox>(form, "Presets");
+        presets.SelectedIndex = presets.Items.IndexOf("Dot only");
+        Assert.Equal(2, s.Profiles.Count);
+        Assert.Equal("Dot only", s.Active.Name);
+        Assert.Equal(0, s.Active.Length);
+        Assert.Equal(0, presets.SelectedIndex);   // back to "+ Add a ready-made crosshair…"
+    });
+
+    [Fact]
+    public void DarkThemeColorsTheTrayMenu()
+    {
+        Theme.Apply(AppTheme.Dark);
+        try
+        {
+            var colors = Assert.IsType<ToolStripProfessionalRenderer>(ToolStripManager.Renderer).ColorTable;
+            Assert.True(colors.ToolStripDropDownBackground.GetBrightness() < 0.2);
+            Assert.True(Theme.MenuText.GetBrightness() > 0.8);
+        }
+        finally { Theme.Apply(AppTheme.Light); }
+        Assert.False(Theme.IsDark);
+    }
+
+    [Fact]
+    public void DarkThemeColorsTheDesignerButKeepsSwatchesAndPreview() => RunSta(() =>
+    {
+        Theme.Apply(AppTheme.Dark);
+        try
+        {
+            var s = new AppSettings();
+            s.Profiles[0].Color = Color.Lime;
+            using var form = new DesignerForm(s, () => { });
+            form.CreateControl();
+            Assert.True(form.BackColor.GetBrightness() < 0.2);
+            Assert.True(Find<TextBox>(form, "Name").BackColor.GetBrightness() < 0.25);
+            Assert.True(Find<TextBox>(form, "Name").ForeColor.GetBrightness() > 0.8);
+            Assert.Equal(Color.Lime.ToArgb(), Find<Button>(form, "Color").BackColor.ToArgb());   // swatch shows the crosshair color
+            Assert.Equal(0, DwmGetWindowAttribute(form.Handle, 20, out int darkTitleBar, sizeof(int)));
+            Assert.Equal(1, darkTitleBar);   // Windows was asked for a dark title bar
+        }
+        finally { Theme.Apply(AppTheme.Light); }
+    });
+
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
+
+    // Kept in this class so it never runs at the same time as the theme tests above (xUnit runs classes in parallel).
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd, int command);
+
+    /// <summary>
+    /// Not a check: when OC_SNAPSHOT_DIR is set, saves pictures of the designer in both themes for a visual review.
+    /// The window is shown far off-screen and never activated.
+    /// </summary>
+    [Fact]
+    public void SaveDesignerPictures()
+    {
+        var dir = Environment.GetEnvironmentVariable("OC_SNAPSHOT_DIR");
+        if (string.IsNullOrEmpty(dir)) return;
+        RunSta(() =>
+        {
+            foreach (var theme in new[] { AppTheme.Dark, AppTheme.Light })
+            {
+                Theme.Apply(theme);
+                var s = new AppSettings();
+                s.Profiles[0].DotSize = 2;
+                s.Profiles.Add(new CrosshairStyle { Name = "Sniper", Length = 12, Gap = 5, CircleRadius = 16 });
+                using var form = new DesignerForm(s, () => { }, _ => { }) { StartPosition = FormStartPosition.Manual, Location = new Point(-5000, -5000) };
+                form.CreateControl();
+                ShowWindow(form.Handle, 4);   // SW_SHOWNOACTIVATE
+                foreach (var tab in new[] { "Basics", "Lines", "Animation" })
+                {
+                    Controls(form).OfType<RadioButton>().First(r => r.Text == tab).Checked = true;
+                    Application.DoEvents();
+                    using var bmp = new Bitmap(form.Width, form.Height);
+                    form.DrawToBitmap(bmp, new Rectangle(Point.Empty, form.Size));
+                    bmp.Save(Path.Combine(dir, $"designer-{theme}-{tab}.png"));
+                }
+                form.Close();
+            }
+            Theme.Apply(AppTheme.Light);
+        });
+    }
+
+    private static IEnumerable<Control> Controls(Control parent) =>
+        parent.Controls.Cast<Control>().SelectMany(c => Controls(c).Prepend(c));
 }
 
 public class SettingsTests

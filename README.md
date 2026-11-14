@@ -5,11 +5,13 @@ of any game running in **borderless/windowed** mode. No ads, no telemetry, no ne
 
 ## Features
 
-- **Designer** with a live zoomed preview:
+- **Easy customize window** with sliders, color pickers, hover tips, a live animated preview and **ready-made
+  crosshairs** to start from:
   - lines: 2 to 8 arms, length, thickness, gap, T-style
   - center dot (square or round), circle or arc, shapes (chevron, triangle, square)
   - a short text label under the crosshair
-  - color, opacity, outline, rotation (45° makes an X), blur
+  - color, opacity, outline, rotation (45° makes an X), soft edges
+- **Dark mode** (the default), light mode, or match Windows
 - **Custom images:** use any PNG (transparency works) or **animated GIF** as your crosshair, scaled 10–400 %
 - **Animations:**
   - **Shoot:** opens up when you left-click and eases back
@@ -19,15 +21,21 @@ of any game running in **borderless/windowed** mode. No ads, no telemetry, no ne
   file. Codes from version 1.0 (`OC1:…`) still import.
 - **PNG export** of any crosshair
 - **Multi-monitor:** pick the display; nudge the crosshair pixel by pixel, remembered per display
-- **Hide while aiming:** optionally hides the crosshair while the right mouse button is held
+- **Hide while aiming:** optionally hides the crosshair while you hold the right, middle or a side mouse button
 - **Global hotkeys** (customizable), **Start with Windows**, tray icon
 - Click-through and never takes focus, so it can't get in the way of your game
 
 ## Install
 
-Download `OpenCrosshair.exe` from [Releases](../../releases) and run it. It's a single self-contained file, so
-nothing else needs installing. The app lives in the system tray: right-click the icon for options, double-click
-for the designer.
+Download one file from [Releases](../../releases) and run it. Nothing gets installed.
+
+| File | For |
+|---|---|
+| `OpenCrosshair.exe` | Most PCs (Windows 10/11, 64-bit). Everything included, about 50 MB. |
+| `OpenCrosshair-small.exe` | Same app, about 1 MB, if you have the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0). Windows offers to download it if it's missing. |
+| `OpenCrosshair-arm64.exe` | Windows on ARM laptops (e.g. Snapdragon). |
+
+The app lives in the system tray (by the clock): double-click the icon to customize, right-click for options.
 
 ## Default hotkeys
 
@@ -57,9 +65,12 @@ Everything is stored in `%APPDATA%\OpenCrosshair\settings.json`. If that file is
   overlays, so check the rules of what you play. Use at your own risk.
 - **Shoot animation** reacts to every left click, including clicks outside games. It only checks whether the button
   is down (no mouse hook) and intercepts nothing.
-- **Images:** files up to 10 MB, shrunk to fit 512 px. Animated GIFs play up to 60 frames.
+- **Images:** files up to 25 MB, shrunk to fit 1024 px. Very long or large animated GIFs are cut short (at most
+  300 frames, about 128 MB of memory).
 - **Labels:** emoji aren't supported.
 - English only.
+
+See [ROADMAP.md](ROADMAP.md) for what's planned.
 
 ## Build from source
 

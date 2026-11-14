@@ -1,51 +1,76 @@
+using System.ComponentModel;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 
 namespace OpenCrosshair;
 
-/// <summary>Crosshair list on the left, every setting in a PropertyGrid, live zoomed preview, share codes.</summary>
+/// <summary>
+/// The "customize" window: saved crosshairs and presets on the left, a live preview in the middle,
+/// settings in sections on the right (plain labels, sliders, color swatches, hover tips), share codes at the bottom.
+/// </summary>
 internal sealed class DesignerForm : Form
 {
+    private static readonly (string Name, CrosshairStyle Style)[] Presets =
+    [
+        ("Classic cross", new CrosshairStyle()),
+        ("Cross with dot", new CrosshairStyle { Gap = 4, DotSize = 2 }),
+        ("Dot only", new CrosshairStyle { Length = 0, DotSize = 4, RoundDot = true }),
+        ("T-shape", new CrosshairStyle { TStyle = true, Length = 8 }),
+        ("X", new CrosshairStyle { Rotation = 45, Length = 8, Gap = 4 }),
+        ("Circle and dot", new CrosshairStyle { Length = 0, CircleRadius = 14, CircleThickness = 2, DotSize = 2, RoundDot = true }),
+        ("Chevron", new CrosshairStyle { Length = 0, Shape = CrosshairShape.Chevron, ShapeSize = 14, Gap = 2 }),
+        ("Pulsing dot", new CrosshairStyle { Length = 0, DotSize = 5, RoundDot = true, Animation = CrosshairAnimation.Breathe }),
+        ("Shooting cross", new CrosshairStyle { Gap = 4, Animation = CrosshairAnimation.Shoot }),
+    ];
+
+    private static readonly (CrosshairAnimation Value, string Label, string Help)[] Animations =
+    [
+        (CrosshairAnimation.None, "None", "The crosshair stays still."),
+        (CrosshairAnimation.Shoot, "Shoot", "Opens up every time you left-click, then eases back. The preview fires every 1.5 s."),
+        (CrosshairAnimation.Breathe, "Breathe", "Slowly fades in and out."),
+        (CrosshairAnimation.Blink, "Blink", "Switches on and off."),
+        (CrosshairAnimation.Rotate, "Rotate", "Spins around its center."),
+        (CrosshairAnimation.Rainbow, "Rainbow", "Cycles through every color."),
+    ];
+
     private readonly AppSettings _s;
     private readonly Action _changed;
-    private readonly ListBox _list = new() { Dock = DockStyle.Fill, IntegralHeight = false };
-    private readonly PropertyGrid _grid = new() { Dock = DockStyle.Fill, ToolbarVisible = false, PropertySort = PropertySort.Categorized };
-    private readonly PictureBox _preview = new() { Dock = DockStyle.Fill, BackColor = Color.FromArgb(48, 52, 60) };
-    private readonly TextBox _code = new() { Dock = DockStyle.Fill, PlaceholderText = "Paste a share code here, then Import" };
-    private bool _syncing;
+    private readonly Action<AppTheme>? _setTheme;
+    private readonly ListBox _list = new() { Dock = DockStyle.Fill, IntegralHeight = false, BorderStyle = BorderStyle.FixedSingle };
+    private readonly PictureBox _preview = new() { Dock = DockStyle.Fill, BackColor = Color.FromArgb(40, 44, 52) };
+    private readonly TextBox _code = new() { Dock = DockStyle.Fill, PlaceholderText = "Paste a share code here, then press Import" };
+    private readonly Label _animationHelp = new() { AutoSize = true, MaximumSize = new Size(240, 0) };
+    private readonly ToolTip _tips = new() { AutoPopDelay = 20000, InitialDelay = 300 };
+    private readonly List<Action> _refreshers = [];   // copy the active crosshair's values into the controls
+    private readonly System.Windows.Forms.Timer _previewTimer = new() { Interval = 33 };   // animates the preview, ~30 fps
+    private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+    private CrosshairSprite? _sprite;
+    private bool _syncing;   // controls are being filled from settings, so their change events mustn't write back
 
-    public DesignerForm(AppSettings settings, Action changed)
+    public DesignerForm(AppSettings settings, Action changed, Action<AppTheme>? setTheme = null)
     {
         _s = settings;
         _changed = changed;
-        Text = "OpenCrosshair designer";
-        ClientSize = new Size(880, 540);
-        MinimumSize = new Size(640, 400);
+        _setTheme = setTheme;
+        Text = "OpenCrosshair – customize your crosshair";
+        Font = new Font("Segoe UI", 9.5f);
+        ClientSize = new Size(1140, 660);
+        MinimumSize = new Size(1000, 580);
         StartPosition = FormStartPosition.CenterScreen;
 
-        var split = new SplitContainer { Dock = DockStyle.Fill, SplitterDistance = 340 };
-        split.Panel1.Controls.Add(_grid);
-        split.Panel2.Controls.Add(_preview);
-
-        var share = new TableLayoutPanel { Dock = DockStyle.Bottom, Height = 38, ColumnCount = 5, Padding = new Padding(4) };
-        share.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        share.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        share.Controls.Add(new Label { Text = "Share code:", AutoSize = true, Anchor = AnchorStyles.Left });
-        share.Controls.Add(_code);
-        share.Controls.Add(Button("Copy mine", CopyCode));
-        share.Controls.Add(Button("Import", ImportCode));
-        share.Controls.Add(Button("Export PNG", ExportPng));
-
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true };
-        buttons.Controls.AddRange([Button("New", AddNew), Button("Duplicate", Duplicate), Button("Delete", Delete)]);
-        var left = new Panel { Dock = DockStyle.Left, Width = 210, Padding = new Padding(4) };
-        left.Controls.Add(_list);
-        left.Controls.Add(buttons);
-
-        // Fill first, edges after: WinForms docks the last-added control first.
-        Controls.Add(split);
-        Controls.Add(share);
-        Controls.Add(left);
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 2, Padding = new Padding(10) };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 480));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.Controls.Add(BuildCrosshairList(), 0, 0);
+        layout.Controls.Add(BuildPreview(), 1, 0);
+        layout.Controls.Add(BuildSettings(), 2, 0);
+        var bottom = BuildBottom();
+        layout.Controls.Add(bottom, 0, 1);
+        layout.SetColumnSpan(bottom, 3);
+        Controls.Add(layout);
 
         _list.SelectedIndexChanged += (_, _) =>
         {
@@ -54,20 +79,362 @@ internal sealed class DesignerForm : Form
             ShowActive();
             _changed();
         };
-        _grid.PropertyValueChanged += (_, _) =>
-        {
-            _s.Active.Clamp();
-            _grid.Refresh();
-            _syncing = true;
-            _list.Items[_s.ActiveProfile] = _s.Active.Name;
-            _syncing = false;
-            ShowActive();
-            _changed();
-        };
         _preview.Paint += DrawPreview;
         _preview.Resize += (_, _) => _preview.Invalidate();
+        _previewTimer.Tick += (_, _) => _preview.Invalidate();
+        FormClosed += (_, _) =>
+        {
+            _previewTimer.Dispose();
+            _sprite?.Dispose();
+        };
+        Theme.Style(this);   // before SyncFromSettings, which paints the color swatches
         SyncFromSettings();
     }
+
+    // ---- layout ----------------------------------------------------------------------------------
+
+    private Control BuildCrosshairList()
+    {
+        var presets = new ComboBox { Dock = DockStyle.Bottom, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 6, 0, 0), Name = "Presets" };
+        presets.Items.Add("+ Add a ready-made one…");
+        foreach (var (name, _) in Presets) presets.Items.Add(name);
+        presets.SelectedIndex = 0;
+        presets.SelectedIndexChanged += (_, _) =>
+        {
+            if (presets.SelectedIndex <= 0) return;
+            var style = Presets[presets.SelectedIndex - 1].Style.Clone();
+            style.Name = Presets[presets.SelectedIndex - 1].Name;
+            presets.SelectedIndex = 0;
+            AddAndSelect(style);
+        };
+        _tips.SetToolTip(presets, "Start from a ready-made design, then change anything you like");
+
+        var buttons = new TableLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, ColumnCount = 3, Margin = new Padding(0) };
+        for (int i = 0; i < 3; i++) buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
+        foreach (var b in new[] { Button("New", AddNew), Button("Copy", Duplicate), Button("Delete", Delete) })
+        {
+            b.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+            buttons.Controls.Add(b);
+        }
+
+        var panel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 10, 0) };
+        panel.Controls.Add(_list);
+        panel.Controls.Add(presets);
+        panel.Controls.Add(buttons);
+        panel.Controls.Add(Heading("Your crosshairs"));
+        _tips.SetToolTip(_list, "Click one to use it. Switch while playing with Ctrl+Alt+N.");
+        return panel;
+    }
+
+    private Control BuildPreview()
+    {
+        var hint = new Label
+        {
+            Dock = DockStyle.Bottom, AutoSize = false, Height = 40, TextAlign = ContentAlignment.MiddleCenter, Tag = "subtle",
+            ForeColor = Theme.Subtle, Text = "This is how it looks on screen. Every change is saved and shown right away.",
+        };
+        _preview.Tag = "keep";   // stays dark in both themes, so every crosshair color is easy to see
+        var panel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 10, 0) };
+        panel.Controls.Add(_preview);
+        panel.Controls.Add(hint);
+        panel.Controls.Add(Heading("Preview"));
+        return panel;
+    }
+
+    private Control BuildSettings()
+    {
+        var host = new Panel { Dock = DockStyle.Fill };
+        var tabs = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Margin = new Padding(0) };
+        var sections = new (string Title, TableLayoutPanel Panel)[]
+        {
+            ("Basics", BasicsSection()), ("Lines", LinesSection()), ("Dot & circle", DotSection()),
+            ("Shapes & text", ExtrasSection()), ("Image", ImageSection()), ("Animation", AnimationSection()),
+        };
+        foreach (var (title, section) in sections)
+        {
+            // A last row that takes the leftover height keeps the real rows packed at the top.
+            section.RowCount++;
+            section.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            // Radio buttons drawn as buttons act as tabs; unlike TabControl they can be colored for the dark theme.
+            var tab = new RadioButton
+            {
+                Text = title, Appearance = Appearance.Button, AutoSize = true, FlatStyle = FlatStyle.Flat,
+                UseMnemonic = false, Margin = new Padding(0, 0, 3, 4), Padding = new Padding(1, 2, 1, 2),
+            };
+            tab.FlatAppearance.CheckedBackColor = Theme.Accent;
+            tab.CheckedChanged += (_, _) =>
+            {
+                section.Visible = tab.Checked;
+                tab.ForeColor = tab.Checked ? Color.White : Theme.Text;
+            };
+            tabs.Controls.Add(tab);
+            host.Controls.Add(section);
+        }
+        host.Controls.Add(tabs);
+        ((RadioButton)tabs.Controls[0]).Checked = true;
+
+        var panel = new Panel { Dock = DockStyle.Fill };
+        panel.Controls.Add(host);
+        panel.Controls.Add(Heading("Settings"));
+        return panel;
+    }
+
+    private Control BuildBottom()
+    {
+        var bar = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 7, Margin = new Padding(0, 8, 0, 0) };
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (int i = 0; i < 5; i++) bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        bar.Controls.Add(new Label { Text = "Share code:", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
+        bar.Controls.Add(_code, 1, 0);
+        bar.Controls.Add(Button("Copy mine", CopyCode), 2, 0);
+        bar.Controls.Add(Button("Import", ImportCode), 3, 0);
+        bar.Controls.Add(Button("Save as PNG", ExportPng), 4, 0);
+        _tips.SetToolTip(_code, "Share codes contain every setting except a custom image file");
+
+        var theme = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 140, Anchor = AnchorStyles.Right };
+        theme.Items.AddRange(["Dark theme", "Light theme", "Match Windows"]);
+        theme.SelectedIndex = (int)_s.Theme;
+        theme.SelectedIndexChanged += (_, _) => _setTheme?.Invoke((AppTheme)theme.SelectedIndex);
+        theme.Enabled = _setTheme is not null;
+        bar.Controls.Add(theme, 6, 0);
+
+        var h = _s.Hotkeys;
+        var hotkeys = new Label
+        {
+            AutoSize = true, Margin = new Padding(0, 8, 0, 0), ForeColor = Theme.Subtle, Tag = "subtle",
+            Text = $"Hotkeys:  {h["Toggle"]} show/hide   ·   {h["NextProfile"]} next crosshair   ·   {h["NudgeUp"].Replace("Up", "Arrows")} move   ·   "
+                + $"{h["ResetOffset"]} back to center   ·   {h["Designer"]} open this window",
+        };
+        bar.Controls.Add(hotkeys, 0, 1);
+        bar.SetColumnSpan(hotkeys, 7);
+        return bar;
+    }
+
+    // ---- settings sections -----------------------------------------------------------------------
+
+    private TableLayoutPanel BasicsSection()
+    {
+        var t = Section();
+        Row(t, "Name", TextBoxFor(nameof(CrosshairStyle.Name), 40, s => s.Name, (s, v) => s.Name = v));
+        Row(t, "Color", ColorPicker(nameof(CrosshairStyle.Color), s => s.Color, (s, v) => s.Color = v));
+        Row(t, "Opacity", Slider(nameof(CrosshairStyle.OpacityPercent), 5, 100, "%", s => s.OpacityPercent, (s, v) => s.OpacityPercent = v));
+        Row(t, "", Check(nameof(CrosshairStyle.Outline), "Dark outline around everything", s => s.Outline, (s, v) => s.Outline = v));
+        Row(t, "Outline width", Slider(nameof(CrosshairStyle.OutlineThickness), 1, 5, "px", s => s.OutlineThickness, (s, v) => s.OutlineThickness = v));
+        Row(t, "Outline color", ColorPicker(nameof(CrosshairStyle.OutlineColor), s => s.OutlineColor, (s, v) => s.OutlineColor = v));
+        Row(t, "Rotation", Slider(nameof(CrosshairStyle.Rotation), 0, 359, "°", s => s.Rotation, (s, v) => s.Rotation = v));
+        Row(t, "Soft edges", Slider(nameof(CrosshairStyle.Blur), 0, 10, "px", s => s.Blur, (s, v) => s.Blur = v));
+        return t;
+    }
+
+    private TableLayoutPanel LinesSection()
+    {
+        var t = Section();
+        Row(t, "Length", Slider(nameof(CrosshairStyle.Length), 0, 100, "px", s => s.Length, (s, v) => s.Length = v));
+        Row(t, "Thickness", Slider(nameof(CrosshairStyle.Thickness), 1, 30, "px", s => s.Thickness, (s, v) => s.Thickness = v));
+        Row(t, "Gap", Slider(nameof(CrosshairStyle.Gap), 0, 100, "px", s => s.Gap, (s, v) => s.Gap = v));
+        Row(t, "Number of lines", Slider(nameof(CrosshairStyle.Arms), 2, 8, "", s => s.Arms, (s, v) => s.Arms = v));
+        Row(t, "", Check(nameof(CrosshairStyle.TStyle), "Hide the top line (T-shape)", s => s.TStyle, (s, v) => s.TStyle = v));
+        return t;
+    }
+
+    private TableLayoutPanel DotSection()
+    {
+        var t = Section();
+        Row(t, "Dot size", Slider(nameof(CrosshairStyle.DotSize), 0, 30, "px", s => s.DotSize, (s, v) => s.DotSize = v));
+        Row(t, "", Check(nameof(CrosshairStyle.RoundDot), "Round dot", s => s.RoundDot, (s, v) => s.RoundDot = v));
+        Row(t, "Circle size", Slider(nameof(CrosshairStyle.CircleRadius), 0, 200, "px", s => s.CircleRadius, (s, v) => s.CircleRadius = v));
+        Row(t, "Circle thickness", Slider(nameof(CrosshairStyle.CircleThickness), 1, 20, "px", s => s.CircleThickness, (s, v) => s.CircleThickness = v));
+        Row(t, "Circle amount", Slider(nameof(CrosshairStyle.CircleArc), 30, 360, "°", s => s.CircleArc, (s, v) => s.CircleArc = v));
+        return t;
+    }
+
+    private TableLayoutPanel ExtrasSection()
+    {
+        var t = Section();
+        Row(t, "Shape", Choice<CrosshairShape>(nameof(CrosshairStyle.Shape),
+            [(CrosshairShape.None, "None"), (CrosshairShape.Chevron, "Chevron ^"), (CrosshairShape.Triangle, "Triangle"), (CrosshairShape.Square, "Square")],
+            s => s.Shape, (s, v) => s.Shape = v));
+        Row(t, "Shape size", Slider(nameof(CrosshairStyle.ShapeSize), 4, 100, "px", s => s.ShapeSize, (s, v) => s.ShapeSize = v));
+        Row(t, "Text", TextBoxFor(nameof(CrosshairStyle.LabelText), 30, s => s.LabelText ?? "", (s, v) => s.LabelText = v));
+        Row(t, "Text size", Slider(nameof(CrosshairStyle.LabelSize), 6, 48, "px", s => s.LabelSize, (s, v) => s.LabelSize = v));
+        return t;
+    }
+
+    private TableLayoutPanel ImageSection()
+    {
+        var t = Section();
+        var file = new TextBox { ReadOnly = true, Dock = DockStyle.Fill, PlaceholderText = "No image: using the drawn crosshair" };
+        var choose = Button("Choose…", () =>
+        {
+            using var dialog = new OpenFileDialog { Filter = "Images (PNG, GIF, BMP, JPG)|*.png;*.gif;*.bmp;*.jpg;*.jpeg|All files|*.*" };
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            _s.Active.ImagePath = dialog.FileName;
+            file.Text = dialog.FileName;
+            Apply();
+        });
+        var remove = Button("Remove", () =>
+        {
+            _s.Active.ImagePath = null;
+            file.Text = "";
+            Apply();
+        });
+        var row = new TableLayoutPanel { ColumnCount = 3, AutoSize = true, Margin = new Padding(0) };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        row.Controls.Add(file, 0, 0);
+        row.Controls.Add(choose, 1, 0);
+        row.Controls.Add(remove, 2, 0);
+        _refreshers.Add(() => file.Text = _s.Active.ImagePath ?? "");
+        Row(t, "Picture", row, nameof(CrosshairStyle.ImagePath));
+        Row(t, "Size", Slider(nameof(CrosshairStyle.ImageScalePercent), 10, 400, "%", s => s.ImageScalePercent, (s, v) => s.ImageScalePercent = v));
+        Row(t, "", new Label
+        {
+            AutoSize = true, MaximumSize = new Size(260, 0), ForeColor = Theme.Subtle, Tag = "subtle",
+            Text = "Use a PNG with a transparent background, or an animated GIF. Opacity, rotation, soft edges and animations still apply.",
+        });
+        return t;
+    }
+
+    private TableLayoutPanel AnimationSection()
+    {
+        var t = Section();
+        Row(t, "Animation", Choice<CrosshairAnimation>(nameof(CrosshairStyle.Animation),
+            Animations.Select(a => (a.Value, a.Label)).ToArray(), s => s.Animation, (s, v) => s.Animation = v));
+        Row(t, "Speed", Slider(nameof(CrosshairStyle.AnimationSpeed), 1, 10, "", s => s.AnimationSpeed, (s, v) => s.AnimationSpeed = v));
+        _animationHelp.ForeColor = Theme.Subtle;
+        _animationHelp.Tag = "subtle";
+        Row(t, "", _animationHelp);
+        return t;
+    }
+
+    // ---- building blocks -------------------------------------------------------------------------
+
+    private static TableLayoutPanel Section()
+    {
+        var t = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, AutoScroll = true, Visible = false, Padding = new Padding(2, 8, 12, 0) };
+        t.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
+        t.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        return t;
+    }
+
+    private void Row(TableLayoutPanel section, string label, Control control, string? property = null)
+    {
+        int row = section.RowCount++;
+        section.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        var caption = new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 6, 8, 6) };
+        control.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        if (label.Length > 0) control.AccessibleName = label;
+        property ??= control.Name.Length > 0 ? control.Name : null;
+        var help = property is null ? null : TypeDescriptor.GetProperties(typeof(CrosshairStyle))[property]?.Description;
+        if (!string.IsNullOrEmpty(help))
+        {
+            _tips.SetToolTip(caption, help);
+            _tips.SetToolTip(control, help);
+            foreach (Control child in control.Controls) _tips.SetToolTip(child, help);
+        }
+        section.Controls.Add(caption, 0, row);
+        section.Controls.Add(control, 1, row);
+    }
+
+    private Control Slider(string property, int min, int max, string unit, Func<CrosshairStyle, int> get, Action<CrosshairStyle, int> set)
+    {
+        var bar = new TrackBar
+        {
+            Minimum = min, Maximum = max, TickStyle = TickStyle.None, AutoSize = false, Height = 30, Dock = DockStyle.Fill,
+            Name = property + "Slider", LargeChange = Math.Max(1, (max - min) / 10), AccessibleName = property,
+        };
+        var number = new NumericUpDown { Minimum = min, Maximum = max, Width = 64, Dock = DockStyle.Right, Name = property };
+        var units = new Label { Text = unit, Width = 26, Dock = DockStyle.Right, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(4, 0, 0, 0) };
+        var panel = new Panel { Height = 32, Name = property, Margin = new Padding(0, 2, 0, 2) };
+        panel.Controls.Add(bar);
+        panel.Controls.Add(number);
+        panel.Controls.Add(units);
+        bar.ValueChanged += (_, _) => number.Value = bar.Value;
+        number.ValueChanged += (_, _) =>
+        {
+            bar.Value = (int)number.Value;
+            if (_syncing) return;
+            set(_s.Active, (int)number.Value);
+            Apply();
+        };
+        _refreshers.Add(() => number.Value = Math.Clamp(get(_s.Active), min, max));
+        return panel;
+    }
+
+    private Control Check(string property, string text, Func<CrosshairStyle, bool> get, Action<CrosshairStyle, bool> set)
+    {
+        var box = new CheckBox { Text = text, AutoSize = true, Name = property };
+        box.CheckedChanged += (_, _) =>
+        {
+            if (_syncing) return;
+            set(_s.Active, box.Checked);
+            Apply();
+        };
+        _refreshers.Add(() => box.Checked = get(_s.Active));
+        return box;
+    }
+
+    private Control ColorPicker(string property, Func<CrosshairStyle, Color> get, Action<CrosshairStyle, Color> set)
+    {
+        var swatch = new Button { FlatStyle = FlatStyle.Flat, Height = 30, Name = property, Tag = "keep", Text = "Click to change", TextAlign = ContentAlignment.MiddleCenter };
+        void Show(Color c)
+        {
+            swatch.BackColor = c;
+            swatch.ForeColor = c.GetBrightness() > 0.55 ? Color.Black : Color.White;   // readable on any swatch
+            swatch.Text = $"#{CrosshairStyle.Hex(c)}   (click to change)";
+        }
+        swatch.Click += (_, _) =>
+        {
+            using var dialog = new ColorDialog { Color = get(_s.Active), FullOpen = true };
+            if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            set(_s.Active, dialog.Color);
+            Show(dialog.Color);
+            Apply();
+        };
+        _refreshers.Add(() => Show(get(_s.Active)));
+        return swatch;
+    }
+
+    private Control Choice<T>(string property, (T Value, string Label)[] options, Func<CrosshairStyle, T> get, Action<CrosshairStyle, T> set)
+    {
+        var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Name = property };
+        foreach (var (_, label) in options) box.Items.Add(label);
+        box.SelectedIndexChanged += (_, _) =>
+        {
+            if (_syncing || box.SelectedIndex < 0) return;
+            set(_s.Active, options[box.SelectedIndex].Value);
+            Apply();
+        };
+        _refreshers.Add(() => box.SelectedIndex = Math.Max(0, Array.FindIndex(options, o => EqualityComparer<T>.Default.Equals(o.Value, get(_s.Active)))));
+        return box;
+    }
+
+    private Control TextBoxFor(string property, int maxLength, Func<CrosshairStyle, string> get, Action<CrosshairStyle, string> set)
+    {
+        var box = new TextBox { MaxLength = maxLength, Name = property };
+        box.TextChanged += (_, _) =>
+        {
+            if (_syncing) return;
+            set(_s.Active, box.Text);
+            Apply();
+        };
+        _refreshers.Add(() => box.Text = get(_s.Active));
+        return box;
+    }
+
+    private static Label Heading(string text) =>
+        new() { Text = text, Dock = DockStyle.Top, AutoSize = false, Height = 30, Font = new Font("Segoe UI Semibold", 11f) };
+
+    private static Button Button(string text, Action onClick)
+    {
+        var b = new Button { Text = text, AutoSize = true, Padding = new Padding(6, 2, 6, 2) };
+        b.Click += (_, _) => onClick();
+        return b;
+    }
+
+    // ---- behavior --------------------------------------------------------------------------------
 
     /// <summary>Reloads the list after the active crosshair changed elsewhere (tray menu, hotkey).</summary>
     public void SyncFromSettings()
@@ -84,7 +451,30 @@ internal sealed class DesignerForm : Form
 
     private void ShowActive()
     {
-        _grid.SelectedObject = _s.Active;
+        _syncing = true;
+        foreach (var refresh in _refreshers) refresh();
+        _syncing = false;
+        RebuildPreview();
+    }
+
+    /// <summary>A setting was changed by the user: keep values valid, update the list and preview, save and show it on screen.</summary>
+    private void Apply()
+    {
+        _s.Active.Clamp();
+        _syncing = true;
+        _list.Items[_s.ActiveProfile] = _s.Active.Name;
+        _syncing = false;
+        RebuildPreview();
+        _changed();
+    }
+
+    private void RebuildPreview()
+    {
+        // Built once per change, not per paint: loading an image or GIF 30 times a second would be wasteful.
+        _sprite?.Dispose();
+        _sprite = new CrosshairSprite(_s.Active);
+        _previewTimer.Enabled = _sprite.IsAnimated;
+        _animationHelp.Text = Animations.First(a => a.Value == _s.Active.Animation).Help;
         _preview.Invalidate();
     }
 
@@ -137,7 +527,7 @@ internal sealed class DesignerForm : Form
         }
         else
         {
-            MessageBox.Show(this, "That isn't a valid OpenCrosshair share code (it should start with OC1:).", Text,
+            MessageBox.Show(this, "That isn't a valid OpenCrosshair share code (it should start with OC2: or OC1:).", Text,
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
@@ -152,27 +542,24 @@ internal sealed class DesignerForm : Form
 
     private void DrawPreview(object? sender, PaintEventArgs e)
     {
-        var s = _s.Active;
-        var image = CrosshairRenderer.LoadImage(s);
-        using var bmp = image ?? CrosshairRenderer.Draw(s);
-        int zoom = Math.Clamp(Math.Min(_preview.Width, _preview.Height) / bmp.Width, 1, 8);
-        int size = bmp.Width * zoom;
-        var dest = new Rectangle((_preview.Width - size) / 2, (_preview.Height - size) / 2, size, size);
-        using var attributes = new ImageAttributes();
-        attributes.SetColorMatrix(new ColorMatrix { Matrix33 = _s.Active.OpacityPercent / 100f });
-        e.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
-        e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
-        e.Graphics.DrawImage(bmp, dest, 0, 0, bmp.Width, bmp.Height, GraphicsUnit.Pixel, attributes);
-        var note = $"{zoom}× zoom";
-        if (s.ImagePath is not null && image is null) note += "  ·  image not found or unreadable, showing the drawn crosshair";
-        if (s.Animation != CrosshairAnimation.None) note += $"  ·  {s.Animation} plays on screen";
-        TextRenderer.DrawText(e.Graphics, note, Font, new Point(8, 8), Color.Gainsboro);
-    }
-
-    private static Button Button(string text, Action onClick)
-    {
-        var b = new Button { Text = text, AutoSize = true };
-        b.Click += (_, _) => onClick();
-        return b;
+        if (_sprite is null) return;
+        double seconds = _clock.Elapsed.TotalSeconds;
+        // The preview can't see your clicks, so Shoot fires a pretend shot every 1.5 s.
+        var bmp = _sprite.Frame(seconds, seconds % 1.5, out double opacity, out var owned);
+        using (owned)
+        {
+            // Zoom from the still size, so it doesn't jump while frames grow and shrink.
+            int zoom = Math.Clamp(Math.Min(_preview.Width, _preview.Height) / Math.Max(1, _sprite.StillSize.Width), 1, 8);
+            int size = bmp.Width * zoom;
+            var dest = new Rectangle((_preview.Width - size) / 2, (_preview.Height - size) / 2, size, size);
+            using var attributes = new ImageAttributes();
+            attributes.SetColorMatrix(new ColorMatrix { Matrix33 = (float)(_s.Active.OpacityPercent / 100.0 * opacity) });
+            e.Graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+            e.Graphics.PixelOffsetMode = PixelOffsetMode.Half;
+            e.Graphics.DrawImage(bmp, dest, 0, 0, bmp.Width, bmp.Height, GraphicsUnit.Pixel, attributes);
+            var note = $"{zoom}× zoom";
+            if (_sprite.ImageMissing) note += "   ·   picture not found or unreadable, showing the drawn crosshair";
+            TextRenderer.DrawText(e.Graphics, note, Font, new Point(8, 8), Color.Gainsboro);
+        }
     }
 }

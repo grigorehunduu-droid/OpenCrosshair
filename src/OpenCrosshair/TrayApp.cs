@@ -14,17 +14,17 @@ internal sealed class TrayApp : ApplicationContext
     private readonly System.Windows.Forms.Timer _aimTimer = new() { Interval = 15 };
     private readonly System.Windows.Forms.Timer _animationTimer = new() { Interval = 33 };   // ~30 fps
     private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
-    private List<Bitmap> _stills = [];   // current crosshair (several for a GIF), re-rendered only when settings change
-    private List<int> _delaysMs = [];
-    private bool _drawn;                 // drawn crosshair rather than a custom image
-    private Bitmap? _frame;              // last animation frame, when the animation changes pixels
+    private CrosshairSprite? _sprite;   // current crosshair, rebuilt only when settings change
+    private Bitmap? _frame;             // last animation frame, when the animation changes pixels
     private double _lastShot = double.NegativeInfinity;
     private DesignerForm? _designer;
     private bool _aiming;
 
     public TrayApp()
     {
+        bool firstRun = !File.Exists(_path);
         _s = AppSettings.Load(_path);
+        Theme.Apply(_s.Theme);
         _tray = new NotifyIcon { Text = "OpenCrosshair", Icon = MakeTrayIcon(), Visible = true, ContextMenuStrip = new ContextMenuStrip() };
         _tray.ContextMenuStrip.Opening += (_, e) => { BuildMenu(); e.Cancel = false; };
         _tray.DoubleClick += (_, _) => OpenDesigner();
@@ -41,6 +41,29 @@ internal sealed class TrayApp : ApplicationContext
         _animationTimer.Tick += (_, _) => { if (_overlay.Visible) ShowFrame(); };
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         RegisterHotkeys();
+        if (firstRun)
+        {
+            _tray.ShowBalloonTip(10000, "OpenCrosshair is running",
+                $"Your crosshair is in the middle of the screen. Double-click this icon (by the clock) or press {_s.Hotkeys["Designer"]} to customize it.",
+                ToolTipIcon.Info);
+            Save();   // so the tip shows only once
+        }
+    }
+
+    private void SetTheme(AppTheme theme)
+    {
+        if (theme == _s.Theme) return;
+        _s.Theme = theme;
+        Theme.Apply(theme);
+        Save();
+        // Windows pick up the theme when they're created, so reopen the designer. Deferred: this runs from its own event.
+        if (_designer is { IsDisposed: false })
+            _overlay.BeginInvoke(() =>
+            {
+                _designer?.Close();
+                _designer = null;
+                OpenDesigner();
+            });
     }
 
     private Screen SelectedScreen() =>
@@ -48,44 +71,25 @@ internal sealed class TrayApp : ApplicationContext
 
     private void Redraw()
     {
-        var old = _stills;
-        var image = CrosshairRenderer.LoadImageFrames(_s.Active);
-        _drawn = image is null;
-        (_stills, _delaysMs) = image ?? ([CrosshairRenderer.Draw(_s.Active)], [0]);
-        _animationTimer.Enabled = _s.Active.Animation != CrosshairAnimation.None || _stills.Count > 1;
+        var old = _sprite;
+        _sprite = new CrosshairSprite(_s.Active);
+        _animationTimer.Enabled = _sprite.IsAnimated;
         ShowFrame();
-        foreach (var bitmap in old) bitmap.Dispose();   // only after the overlay has switched to the new bitmaps
-    }
-
-    private Bitmap CurrentStill(double ms)
-    {
-        if (_stills.Count == 1) return _stills[0];
-        double t = ms % _delaysMs.Sum();
-        for (int i = 0; i < _stills.Count; i++)
-            if ((t -= _delaysMs[i]) < 0) return _stills[i];
-        return _stills[^1];
+        old?.Dispose();   // only after the overlay has switched to the new bitmaps
     }
 
     private void ShowFrame()
     {
-        var s = _s.Active;
-        double seconds = _clock.Elapsed.TotalSeconds, phase = CrosshairAnimator.Phase(s, seconds);
-        var still = CurrentStill(seconds * 1000);
-        Bitmap? next;
-        if (s.Animation == CrosshairAnimation.Shoot)
-        {
-            // Polls the button state; no mouse hook, nothing is intercepted.
-            if ((Native.GetAsyncKeyState(Native.VK_LBUTTON) & 0x8000) != 0) _lastShot = seconds;
-            next = CrosshairAnimator.Shoot(still, s, CrosshairAnimator.Spread(s, seconds - _lastShot), _drawn);
-        }
-        else next = CrosshairAnimator.Frame(still, s, phase);
-
+        double seconds = _clock.Elapsed.TotalSeconds;
+        // Shoot polls the button state: no mouse hook, nothing is intercepted.
+        if (_s.Active.Animation == CrosshairAnimation.Shoot && (Native.GetAsyncKeyState(Native.VK_LBUTTON) & 0x8000) != 0)
+            _lastShot = seconds;
         var oldFrame = _frame;
-        _frame = next;
+        var image = _sprite!.Frame(seconds, seconds - _lastShot, out double opacity, out _frame);
         var screen = SelectedScreen();
         var off = _s.Offsets.GetValueOrDefault(screen.DeviceName) ?? new Offset(0, 0);
-        byte alpha = (byte)Math.Round(s.OpacityPercent * 2.55 * CrosshairAnimator.Opacity(s, phase));
-        _overlay.SetImage(_frame ?? still, alpha, screen.Bounds, new Point(off.X, off.Y));
+        byte alpha = (byte)Math.Round(_s.Active.OpacityPercent * 2.55 * opacity);
+        _overlay.SetImage(image, alpha, screen.Bounds, new Point(off.X, off.Y));
         oldFrame?.Dispose();
     }
 
@@ -115,15 +119,16 @@ internal sealed class TrayApp : ApplicationContext
 
     private void CheckAiming()
     {
-        bool held = (Native.GetAsyncKeyState(Native.VK_RBUTTON) & 0x8000) != 0;
+        bool held = (Native.GetAsyncKeyState((int)_s.AimButton) & 0x8000) != 0;
         if (held == _aiming) return;
         _aiming = held;
         ApplyVisibility();
     }
 
-    private void SetHideWhileAiming(bool on)
+    private void SetHideWhileAiming(bool on, AimButton button)
     {
         _s.HideWhileAiming = on;
+        _s.AimButton = button;
         _aimTimer.Enabled = on;
         _aiming = false;
         ApplyVisibility();
@@ -170,9 +175,12 @@ internal sealed class TrayApp : ApplicationContext
     {
         var m = _tray.ContextMenuStrip!;
         m.Items.Clear();
+        var customize = Item("Customize…", false, OpenDesigner);
+        customize.Font = new Font(customize.Font, FontStyle.Bold);   // the double-click action, like Windows does it
+        m.Items.Add(customize);
         m.Items.Add(Item("Show crosshair", _s.Visible, ToggleVisible));
 
-        var profiles = new ToolStripMenuItem("Crosshair");
+        var profiles = Item("Crosshair", false, () => { });
         for (int i = 0; i < _s.Profiles.Count; i++)
         {
             int index = i;
@@ -180,7 +188,7 @@ internal sealed class TrayApp : ApplicationContext
         }
         m.Items.Add(profiles);
 
-        var displays = new ToolStripMenuItem("Display");
+        var displays = Item("Display", false, () => { });
         var current = SelectedScreen().DeviceName;
         var screens = Screen.AllScreens;
         for (int i = 0; i < screens.Length; i++)
@@ -191,15 +199,31 @@ internal sealed class TrayApp : ApplicationContext
         }
         m.Items.Add(displays);
 
-        m.Items.Add(Item("Hide while aiming (right mouse)", _s.HideWhileAiming, () => SetHideWhileAiming(!_s.HideWhileAiming)));
+        var aim = Item("Hide while aiming", false, () => { });
+        aim.DropDownItems.Add(Item("Off", !_s.HideWhileAiming, () => SetHideWhileAiming(false, _s.AimButton)));
+        foreach (var (button, label) in new[]
+        {
+            (AimButton.Right, "Right button"), (AimButton.Middle, "Middle button"),
+            (AimButton.Back, "Back side button"), (AimButton.Forward, "Forward side button"),
+        })
+            aim.DropDownItems.Add(Item("While holding: " + label, _s.HideWhileAiming && _s.AimButton == button, () => SetHideWhileAiming(true, button)));
+        m.Items.Add(aim);
+        var theme = Item("Theme", false, () => { });
+        foreach (var (value, label) in new[] { (AppTheme.Dark, "Dark"), (AppTheme.Light, "Light"), (AppTheme.System, "Match Windows") })
+            theme.DropDownItems.Add(Item(label, _s.Theme == value, () => SetTheme(value)));
+        m.Items.Add(theme);
         m.Items.Add(Item("Start with Windows", Startup.Enabled, ToggleStartup));
         m.Items.Add(new ToolStripSeparator());
-        m.Items.Add("Designer…", null, (_, _) => OpenDesigner());
-        m.Items.Add("Exit", null, (_, _) => ExitThread());
+        m.Items.Add(Item("Exit", false, ExitThread));
+        m.BackColor = Theme.MenuBack;
     }
 
-    private static ToolStripMenuItem Item(string text, bool isChecked, Action onClick) =>
-        new(text, null, (_, _) => onClick()) { Checked = isChecked };
+    private static ToolStripMenuItem Item(string text, bool isChecked, Action onClick)
+    {
+        var item = new ToolStripMenuItem(text, null, (_, _) => onClick()) { Checked = isChecked, ForeColor = Theme.MenuText };
+        item.DropDown.BackColor = Theme.MenuBack;
+        return item;
+    }
 
     private void ToggleStartup()
     {
@@ -217,7 +241,7 @@ internal sealed class TrayApp : ApplicationContext
             _designer.Activate();
             return;
         }
-        _designer = new DesignerForm(_s, Changed);
+        _designer = new DesignerForm(_s, Changed, SetTheme);
         _designer.Show();
     }
 
@@ -247,7 +271,7 @@ internal sealed class TrayApp : ApplicationContext
         _designer?.Close();
         _overlay.Close();
         _frame?.Dispose();
-        foreach (var bitmap in _stills) bitmap.Dispose();
+        _sprite?.Dispose();
         Save();
         base.ExitThreadCore();
     }

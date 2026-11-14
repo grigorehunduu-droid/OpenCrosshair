@@ -43,13 +43,12 @@ internal sealed class CrosshairStyle
     [Category("Outline"), Description("1 to 5")] public int OutlineThickness { get; set; } = 1;
     [Category("Outline"), JsonConverter(typeof(HexColorConverter))] public Color OutlineColor { get; set; } = Color.Black;
 
-    [Category("Image"), Description("Picture to use instead of the drawn crosshair: PNG with transparency, or an animated GIF. Empty = drawn crosshair. Rotation and Blur still apply.")]
-    [Editor(typeof(ImageFileEditor), typeof(System.Drawing.Design.UITypeEditor))]
+    [Category("Image"), Description("Picture to use instead of the drawn crosshair: PNG with transparency, or an animated GIF. Rotation, blur and opacity still apply.")]
     public string? ImagePath { get; set; }
     [Category("Image"), Description("Image size in percent (10 to 400)")] public int ImageScalePercent { get; set; } = 100;
 
     [Category("Animation"), JsonConverter(typeof(JsonStringEnumConverter<CrosshairAnimation>)),
-     Description("Shoot: opens up when you left-click and eases back. Breathe: fades in and out. Blink: on and off. Rotate: spins. Rainbow: cycles colors (white, gray and black stay as they are).")]
+     Description("Shoot: opens up when you left-click and eases back. Breathe: fades in and out. Blink: on and off. Rotate: spins. Rainbow: cycles through all colors (on images it shifts their colors, so white, gray and black parts of an image stay).")]
     public CrosshairAnimation Animation { get; set; }
     [Category("Animation"), Description("1 (slowest: a 4 s cycle, or 1.2 s to recover after a shot) to 10 (fastest)")]
     public int AnimationSpeed { get; set; } = 3;
@@ -163,16 +162,6 @@ internal sealed class CrosshairStyle
 // Saved by name in settings and share codes: only append, never rename.
 internal enum CrosshairAnimation { None, Breathe, Blink, Rotate, Rainbow, Shoot }
 internal enum CrosshairShape { None, Chevron, Triangle, Square }
-
-/// <summary>File picker for ImagePath in the designer's PropertyGrid.</summary>
-internal sealed class ImageFileEditor : System.Windows.Forms.Design.FileNameEditor
-{
-    protected override void InitializeDialog(OpenFileDialog dialog)
-    {
-        base.InitializeDialog(dialog);
-        dialog.Filter = "Images|*.png;*.gif;*.bmp;*.jpg;*.jpeg|All files|*.*";
-    }
-}
 
 internal sealed class HexColorConverter : JsonConverter<Color>
 {
