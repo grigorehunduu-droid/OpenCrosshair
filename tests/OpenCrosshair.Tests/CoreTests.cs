@@ -162,6 +162,30 @@ public class DesignerOptionTests
     }
 
     [Fact]
+    public void LabelEmojiKeepTheirOwnColors()
+    {
+        var style = new CrosshairStyle { Color = Color.FromArgb(0, 255, 255), LabelText = "😀", LabelSize = 24, Outline = true, OutlineThickness = 1, OutlineColor = Color.Black };
+        using var bmp = CrosshairRenderer.Draw(style);
+        int yellow = 0, cyan = 0, black = 0;
+        for (int y = bmp.Height / 2 + 10; y < bmp.Height; y++)
+            for (int x = 0; x < bmp.Width; x++)
+            {
+                var p = bmp.GetPixel(x, y);
+                if (p.A < 200) continue;
+                if (p.R > 200 && p.G > 140 && p.B < 100) yellow++;        // the face, in the emoji's own color
+                if (p.R < 60 && p.G > 200 && p.B > 200) cyan++;           // not tinted in the crosshair color
+                if (p.R < 40 && p.G < 40 && p.B < 40) black++;            // the outline (and the eyes)
+            }
+        Assert.True(yellow > 50, $"yellow {yellow}");
+        Assert.True(cyan < 5, $"cyan {cyan}");
+        Assert.True(black > 20, $"black {black}");
+
+        var tooLong = new CrosshairStyle { LabelText = new string('a', 29) + "😀" };
+        tooLong.Clamp();
+        Assert.Equal(new string('a', 29), tooLong.LabelText);   // the emoji is dropped whole, not cut in half
+    }
+
+    [Fact]
     public void BlurSoftensAndPads()
     {
         using var sharp = CrosshairRenderer.Draw(new CrosshairStyle { Outline = false });

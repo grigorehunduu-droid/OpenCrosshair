@@ -35,7 +35,7 @@ internal sealed class CrosshairStyle
     public CrosshairShape Shape { get; set; }
     [Category("Shape"), Description("4 to 100")] public int ShapeSize { get; set; } = 12;
 
-    [Category("Label"), Description("Short text shown under the crosshair, up to 30 characters (emoji aren't supported)")]
+    [Category("Label"), Description("Short text shown under the crosshair, up to 30 characters; emoji like 🎯 keep their own colors")]
     public string? LabelText { get; set; }
     [Category("Label"), Description("6 to 48")] public int LabelSize { get; set; } = 12;
 
@@ -93,8 +93,13 @@ internal sealed class CrosshairStyle
         if (Games is { Count: 0 }) Games = null;
     }
 
-    private static string? Shorten(string? text, int max) =>
-        string.IsNullOrWhiteSpace(text) ? null : text.Trim()[..Math.Min(text.Trim().Length, max)];
+    private static string? Shorten(string? text, int max)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        text = text.Trim();
+        if (text.Length <= max) return text;
+        return text[..(char.IsHighSurrogate(text[max - 1]) ? max - 1 : max)];   // never cut an emoji in half
+    }
 
     private const string LegacyPrefix = "OC1:", Prefix = "OC2:";
     private static readonly JsonSerializerOptions ShareJson = new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };

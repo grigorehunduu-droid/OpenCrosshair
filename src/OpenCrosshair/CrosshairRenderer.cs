@@ -84,12 +84,12 @@ internal static class CrosshairRenderer
             s.Shape != CrosshairShape.None ? s.Gap + s.ShapeSize + s.Thickness : 0,
             s.DotSize, s.Thickness,
         }.Max() + o;
-        using var label = s.LabelText is null ? null : LabelPath(s.LabelText, s.LabelSize);
-        var lb = label?.GetBounds() ?? RectangleF.Empty;
-        int labelTop = reach + 4;
+        // The label (with its outline) is centered under the crosshair, its text starting 4 px below the reach.
+        using var label = s.LabelText is null ? null : ColorText.Render(s.LabelText, s.LabelSize, s.Color, o, s.OutlineColor);
+        int labelTop = reach + 4 - o;
         int c = reach + 2;
         if (label is not null)
-            c = Math.Max(c, (int)Math.Ceiling(Math.Max(labelTop + lb.Height, Math.Max(-lb.Left, lb.Right))) + o + 2);
+            c = Math.Max(c, Math.Max(labelTop + label.Height, (label.Width + 1) / 2) + 2);
 
         var bmp = new Bitmap(2 * c, 2 * c, PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bmp))
@@ -101,15 +101,7 @@ internal static class CrosshairRenderer
             if (label is not null)
             {
                 g.ResetTransform();
-                g.TranslateTransform(c, c + labelTop - lb.Top);
-                g.SmoothingMode = SmoothingMode.AntiAlias;
-                if (o > 0)
-                {
-                    using var pen = new Pen(s.OutlineColor, 2 * o) { LineJoin = LineJoin.Round };
-                    g.DrawPath(pen, label);
-                }
-                using var brush = new SolidBrush(s.Color);
-                g.FillPath(brush, label);
+                g.DrawImageUnscaled(label, c - label.Width / 2, c + labelTop);
             }
         }
         return Finish(bmp, s, image: false);
@@ -193,15 +185,6 @@ internal static class CrosshairRenderer
 
     private static PointF Polar(float radius, double degrees) =>
         new((float)(radius * Math.Cos(degrees * Math.PI / 180)), (float)(radius * Math.Sin(degrees * Math.PI / 180)));
-
-    private static GraphicsPath LabelPath(string text, int size)
-    {
-        var path = new GraphicsPath();
-        using var format = new StringFormat { Alignment = StringAlignment.Center };
-        var family = SystemFonts.MessageBoxFont?.FontFamily ?? FontFamily.GenericSansSerif;
-        path.AddString(text, family, (int)FontStyle.Bold, size, new PointF(0, 0), format);
-        return path;
-    }
 
     /// <summary>Applies the effects that work on finished pixels: rotation (images only; drawn shapes rotate themselves) and blur.</summary>
     private static Bitmap Finish(Bitmap bmp, CrosshairStyle s, bool image)

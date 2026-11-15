@@ -19,4 +19,8 @@
     <EmbeddedResource Include="app.ico" LogicalName="OpenCrosshair.app.ico" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Vortice.Direct2D1" Version="3.8.3" />
+  </ItemGroup>
+
 </Project>
