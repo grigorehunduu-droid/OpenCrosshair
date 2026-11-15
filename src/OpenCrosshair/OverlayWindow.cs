@@ -1,16 +1,19 @@
 namespace OpenCrosshair;
 
 /// <summary>
-/// Borderless, click-through, never-focused, always-on-top window that shows one per-pixel-alpha bitmap
-/// through UpdateLayeredWindow. Nothing is painted the normal WinForms way.
+/// Borderless, never-focused window that shows one per-pixel-alpha bitmap through UpdateLayeredWindow.
+/// Nothing is painted the normal WinForms way. The crosshair overlay is click-through and always on top;
+/// the tour's dimming layer (clickThrough: false) catches clicks except on fully transparent pixels.
 /// </summary>
 internal sealed class OverlayWindow : Form
 {
+    private readonly bool _clickThrough;
     private Bitmap? _image;
     private byte _alpha = 255;
 
-    public OverlayWindow()
+    public OverlayWindow(bool clickThrough = true)
     {
+        _clickThrough = clickThrough;
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
@@ -24,8 +27,8 @@ internal sealed class OverlayWindow : Form
         get
         {
             var cp = base.CreateParams;
-            cp.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TRANSPARENT | Native.WS_EX_TOOLWINDOW
-                | Native.WS_EX_NOACTIVATE | Native.WS_EX_TOPMOST;
+            cp.ExStyle |= Native.WS_EX_LAYERED | Native.WS_EX_TOOLWINDOW | Native.WS_EX_NOACTIVATE
+                | (_clickThrough ? Native.WS_EX_TRANSPARENT | Native.WS_EX_TOPMOST : 0);
             return cp;
         }
     }
@@ -36,11 +39,17 @@ internal sealed class OverlayWindow : Form
     /// </summary>
     public void SetImage(Bitmap image, byte alpha, Rectangle screen, Point offset)
     {
+        int half = image.Width / 2;
+        SetImage(image, alpha, new Rectangle(screen.X + screen.Width / 2 + offset.X - half,
+            screen.Y + screen.Height / 2 + offset.Y - half, image.Width, image.Height));
+    }
+
+    /// <summary>Shows <paramref name="image"/> at <paramref name="bounds"/> (screen pixels, the image's size).</summary>
+    public void SetImage(Bitmap image, byte alpha, Rectangle bounds)
+    {
         _image = image;
         _alpha = alpha;
-        int half = image.Width / 2;
-        Bounds = new Rectangle(screen.X + screen.Width / 2 + offset.X - half,
-            screen.Y + screen.Height / 2 + offset.Y - half, image.Width, image.Height);
+        Bounds = bounds;
         Push();
     }
 

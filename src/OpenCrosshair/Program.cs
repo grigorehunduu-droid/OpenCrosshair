@@ -21,7 +21,8 @@ internal static class Program
             }
             catch (WaitHandleCannotBeOpenedException)
             {
-                MessageBox.Show("OpenCrosshair is already running. Look for its icon in the system tray.", "OpenCrosshair");
+                Lang.Apply(AppSettings.Load(AppSettings.DefaultPath).Language);
+                MessageBox.Show(Lang.T("OpenCrosshair is already running. Look for its icon in the system tray."), "OpenCrosshair");
             }
             return;
         }

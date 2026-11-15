@@ -15,7 +15,7 @@ internal sealed class GamePicker : Form
     {
         AutoScaleDimensions = new SizeF(96f, 96f);
         AutoScaleMode = AutoScaleMode.Dpi;
-        Text = "Link a running game";
+        Text = Lang.T("Link a running game");
         Icon = AppIcon.Large;
         Font = new Font("Segoe UI", 9.5f);
         ClientSize = new Size(480, 400);
@@ -27,10 +27,10 @@ internal sealed class GamePicker : Form
         var hint = new Label
         {
             Dock = DockStyle.Top, Height = 46, Tag = "subtle", ForeColor = Theme.Subtle,
-            Text = "Start your game first, then pick it here. Whenever it comes to the front, this crosshair is switched on.",
+            Text = Lang.T("Start your game first, then pick it here. Whenever it comes to the front, this crosshair is switched on."),
         };
-        var link = new Button { Text = "Link", DialogResult = DialogResult.OK, AutoSize = true, Enabled = false };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, AutoSize = true };
+        var link = new Button { Text = Lang.T("Link"), DialogResult = DialogResult.OK, AutoSize = true, Enabled = false };
+        var cancel = new Button { Text = Lang.T("Cancel"), DialogResult = DialogResult.Cancel, AutoSize = true };
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 8, 0, 0) };
         buttons.Controls.AddRange([cancel, link]);
         Controls.Add(_list);

@@ -1,4 +1,5 @@
 using Microsoft.Win32;
+using static OpenCrosshair.Lang;
 
 namespace OpenCrosshair;
 
@@ -26,6 +27,8 @@ internal sealed class TrayApp : ApplicationContext, IDesignerHost
     {
         bool firstRun = !File.Exists(_path);
         _s = AppSettings.Load(_path);
+        Lang.Apply(_s.Language);
+        if (firstRun) _s.Active.Name = T("Default");
         Theme.Apply(_s.Theme);
         _tray = new NotifyIcon { Text = "OpenCrosshair", Icon = AppIcon.Small, Visible = true, ContextMenuStrip = new ContextMenuStrip() };
         _tray.ContextMenuStrip.Opening += (_, e) => { BuildMenu(); e.Cancel = false; };
@@ -55,8 +58,8 @@ internal sealed class TrayApp : ApplicationContext, IDesignerHost
 
         if (firstRun)
         {
-            _tray.ShowBalloonTip(10000, "OpenCrosshair is running",
-                $"Your crosshair is in the middle of the screen. Double-click this icon (by the clock) or press {_s.Hotkeys["Designer"]} to customize it.",
+            _tray.ShowBalloonTip(10000, T("OpenCrosshair is running"),
+                T("Your crosshair is in the middle of the screen. Double-click this icon (by the clock) or press {0} to customize it.", _s.Hotkeys["Designer"]),
                 ToolTipIcon.Info);
             Save();   // so the tip shows only once
         }
@@ -78,7 +81,21 @@ internal sealed class TrayApp : ApplicationContext, IDesignerHost
         _s.Theme = theme;
         Theme.Apply(theme);
         Save();
-        // Windows pick up the theme when they're created, so reopen the designer. Deferred: this runs from its own event.
+        ReopenDesigner();
+    }
+
+    private void SetLanguage(string? code)
+    {
+        if (code == _s.Language) return;
+        _s.Language = code;
+        Lang.Apply(code);
+        Save();
+        ReopenDesigner();   // the tray menu is rebuilt each time it opens
+    }
+
+    private void ReopenDesigner()
+    {
+        // Windows pick up the theme and language when they're created, so reopen the designer. Deferred: this runs from its own event.
         if (_designer is { IsDisposed: false })
             _overlay.BeginInvoke(() =>
             {
@@ -121,7 +138,7 @@ internal sealed class TrayApp : ApplicationContext, IDesignerHost
         try { _s.Save(_path); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            _tray.ShowBalloonTip(4000, "OpenCrosshair", "Couldn't save settings: " + e.Message, ToolTipIcon.Warning);
+            _tray.ShowBalloonTip(4000, "OpenCrosshair", T("Couldn't save settings: {0}", e.Message), ToolTipIcon.Warning);
         }
     }
 
@@ -193,13 +210,14 @@ internal sealed class TrayApp : ApplicationContext, IDesignerHost
             .Select(a => $"{AppSettings.HotkeyLabel(a.Key)} ({_s.Hotkeys[a.Key]})").ToList();
         if (showProblems && failed.Count > 0)
             _tray.ShowBalloonTip(6000, "OpenCrosshair",
-                "These hotkeys are invalid or used by another app: " + string.Join(", ", failed), ToolTipIcon.Warning);
+                T("These hotkeys are invalid or used by another app: {0}", string.Join(", ", failed)), ToolTipIcon.Warning);
         return failed;
     }
 
     // ---- what the customize window asks of the app ----
     void IDesignerHost.Changed() => Changed();
     void IDesignerHost.SetTheme(AppTheme theme) => SetTheme(theme);
+    void IDesignerHost.SetLanguage(string? code) => SetLanguage(code);
     IReadOnlyList<string> IDesignerHost.ApplyHotkeys()
     {
         var failed = RegisterHotkeys(showProblems: false);
@@ -216,12 +234,12 @@ internal sealed class TrayApp : ApplicationContext, IDesignerHost
     {
         var m = _tray.ContextMenuStrip!;
         m.Items.Clear();
-        var customize = Item("Customize…", false, OpenDesigner);
+        var customize = Item(T("Customize…"), false, OpenDesigner);
         customize.Font = new Font(customize.Font, FontStyle.Bold);   // the double-click action, like Windows does it
         m.Items.Add(customize);
-        m.Items.Add(Item("Show crosshair", _s.Visible, ToggleVisible));
+        m.Items.Add(Item(T("Show crosshair"), _s.Visible, ToggleVisible));
 
-        var profiles = Item("Crosshair", false, () => { });
+        var profiles = Item(T("Crosshair"), false, () => { });
         for (int i = 0; i < _s.Profiles.Count; i++)
         {
             int index = i;
@@ -229,33 +247,40 @@ internal sealed class TrayApp : ApplicationContext, IDesignerHost
         }
         m.Items.Add(profiles);
 
-        var displays = Item("Display", false, () => { });
+        var displays = Item(T("Display"), false, () => { });
         var current = SelectedScreen().DeviceName;
         var screens = Screen.AllScreens;
         for (int i = 0; i < screens.Length; i++)
         {
             var scr = screens[i];
-            var label = $"Display {i + 1} ({scr.Bounds.Width}×{scr.Bounds.Height}{(scr.Primary ? ", primary" : "")})";
+            var label = scr.Primary
+                ? T("Display {0} ({1}×{2}, primary)", i + 1, scr.Bounds.Width, scr.Bounds.Height)
+                : T("Display {0} ({1}×{2})", i + 1, scr.Bounds.Width, scr.Bounds.Height);
             displays.DropDownItems.Add(Item(label, scr.DeviceName == current, () => { _s.Monitor = scr.DeviceName; Changed(); }));
         }
         m.Items.Add(displays);
 
-        var aim = Item("Hide while aiming", false, () => { });
-        aim.DropDownItems.Add(Item("Off", !_s.HideWhileAiming, () => SetHideWhileAiming(false, _s.AimButton)));
+        var aim = Item(T("Hide while aiming"), false, () => { });
+        aim.DropDownItems.Add(Item(T("Off"), !_s.HideWhileAiming, () => SetHideWhileAiming(false, _s.AimButton)));
         foreach (var (button, label) in new[]
         {
-            (AimButton.Right, "Right button"), (AimButton.Middle, "Middle button"),
-            (AimButton.Back, "Back side button"), (AimButton.Forward, "Forward side button"),
+            (AimButton.Right, T("While holding the right button")), (AimButton.Middle, T("While holding the middle button")),
+            (AimButton.Back, T("While holding the back side button")), (AimButton.Forward, T("While holding the forward side button")),
         })
-            aim.DropDownItems.Add(Item("While holding: " + label, _s.HideWhileAiming && _s.AimButton == button, () => SetHideWhileAiming(true, button)));
+            aim.DropDownItems.Add(Item(label, _s.HideWhileAiming && _s.AimButton == button, () => SetHideWhileAiming(true, button)));
         m.Items.Add(aim);
-        var theme = Item("Theme", false, () => { });
-        foreach (var (value, label) in new[] { (AppTheme.Dark, "Dark"), (AppTheme.Light, "Light"), (AppTheme.System, "Match Windows") })
+        var theme = Item(T("Theme"), false, () => { });
+        foreach (var (value, label) in new[] { (AppTheme.Dark, T("Dark")), (AppTheme.Light, T("Light")), (AppTheme.System, T("Match Windows")) })
             theme.DropDownItems.Add(Item(label, _s.Theme == value, () => SetTheme(value)));
         m.Items.Add(theme);
-        m.Items.Add(Item("Start with Windows", Startup.Enabled, ToggleStartup));
+        var language = Item(T("Language"), false, () => { });
+        language.DropDownItems.Add(Item(T("Match Windows"), _s.Language is null, () => SetLanguage(null)));
+        foreach (var (code, name) in Lang.Available)
+            language.DropDownItems.Add(Item(name, _s.Language == code, () => SetLanguage(code)));
+        m.Items.Add(language);
+        m.Items.Add(Item(T("Start with Windows"), Startup.Enabled, ToggleStartup));
         m.Items.Add(new ToolStripSeparator());
-        m.Items.Add(Item("Exit", false, ExitThread));
+        m.Items.Add(Item(T("Exit"), false, ExitThread));
         m.BackColor = Theme.MenuBack;
     }
 
@@ -271,7 +296,7 @@ internal sealed class TrayApp : ApplicationContext, IDesignerHost
         try { Startup.Enabled = !Startup.Enabled; }
         catch (Exception e) when (e is UnauthorizedAccessException or System.Security.SecurityException or IOException)
         {
-            _tray.ShowBalloonTip(4000, "OpenCrosshair", "Couldn't change the startup setting: " + e.Message, ToolTipIcon.Warning);
+            _tray.ShowBalloonTip(4000, "OpenCrosshair", T("Couldn't change the startup setting: {0}", e.Message), ToolTipIcon.Warning);
         }
     }
 

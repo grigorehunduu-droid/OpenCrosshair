@@ -17,6 +17,8 @@
     <InternalsVisibleTo Include="OpenCrosshair.Tests" />
     <!-- Also built in, for the windows and the tray (made by tools/make-icon.ps1) -->
     <EmbeddedResource Include="app.ico" LogicalName="OpenCrosshair.app.ico" />
+    <!-- Translations: English text → translated text, one file per language -->
+    <EmbeddedResource Include="lang\*.json" LogicalName="OpenCrosshair.lang.%(Filename).json" />
   </ItemGroup>
 
   <ItemGroup>

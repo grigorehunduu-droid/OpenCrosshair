@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Win32;
+using static OpenCrosshair.Lang;
 
 namespace OpenCrosshair;
 
@@ -24,6 +25,10 @@ internal sealed class AppSettings
     public bool HideWhileAiming { get; set; }
     [JsonConverter(typeof(JsonStringEnumConverter<AimButton>))] public AimButton AimButton { get; set; } = AimButton.Right;
     [JsonConverter(typeof(JsonStringEnumConverter<AppTheme>))] public AppTheme Theme { get; set; } = AppTheme.Dark;
+    /// <summary>A code from Lang.Available, e.g. "de"; null = Windows' language.</summary>
+    public string? Language { get; set; }
+    /// <summary>The tour of the customize window starts by itself until it has been shown once.</summary>
+    public bool TourSeen { get; set; }
     public Dictionary<string, string> Hotkeys { get; set; } = new(DefaultHotkeys);
 
     public static readonly IReadOnlyDictionary<string, string> DefaultHotkeys = new Dictionary<string, string>
@@ -38,19 +43,18 @@ internal sealed class AppSettings
         ["ResetOffset"] = "Ctrl+Alt+R",
     };
 
-    private static readonly IReadOnlyDictionary<string, string> HotkeyLabels = new Dictionary<string, string>
+    public static string HotkeyLabel(string action) => action switch
     {
-        ["Toggle"] = "Show / hide",
-        ["NextProfile"] = "Next crosshair",
-        ["Designer"] = "Open the customize window",
-        ["NudgeUp"] = "Move up 1 px",
-        ["NudgeDown"] = "Move down 1 px",
-        ["NudgeLeft"] = "Move left 1 px",
-        ["NudgeRight"] = "Move right 1 px",
-        ["ResetOffset"] = "Back to the exact center",
+        "Toggle" => T("Show / hide"),
+        "NextProfile" => T("Next crosshair"),
+        "Designer" => T("Open the customize window"),
+        "NudgeUp" => T("Move up 1 px"),
+        "NudgeDown" => T("Move down 1 px"),
+        "NudgeLeft" => T("Move left 1 px"),
+        "NudgeRight" => T("Move right 1 px"),
+        "ResetOffset" => T("Back to the exact center"),
+        _ => action,
     };
-
-    public static string HotkeyLabel(string action) => HotkeyLabels.GetValueOrDefault(action, action);
 
     [JsonIgnore] public CrosshairStyle Active => Profiles[ActiveProfile];
 
@@ -98,6 +102,7 @@ internal sealed class AppSettings
         Hotkeys ??= new();
         if (!Enum.IsDefined(AimButton)) AimButton = AimButton.Right;
         if (!Enum.IsDefined(Theme)) Theme = AppTheme.Dark;
+        if (!Lang.Available.Any(l => l.Code == Language)) Language = null;
         foreach (var (name, combo) in DefaultHotkeys) Hotkeys.TryAdd(name, combo);
     }
 }

@@ -10,7 +10,7 @@ namespace OpenCrosshair;
 internal static class CrosshairFile
 {
     public const string Extension = ".ochair";
-    public const string Filter = "OpenCrosshair files (*.ochair)|*.ochair";
+    public static string Filter => Lang.T("OpenCrosshair files") + " (*.ochair)|*.ochair";
     private const long MaxFileBytes = 40 * 1024 * 1024;   // a 25 MB picture grows by a third as text
 
     private sealed class Contents
@@ -54,13 +54,13 @@ internal static class CrosshairFile
         {
             if (new FileInfo(path).Length > MaxFileBytes)
             {
-                error = "That file is too big to be a crosshair.";
+                error = Lang.T("That file is too big to be a crosshair.");
                 return false;
             }
             var contents = JsonSerializer.Deserialize<Contents>(File.ReadAllText(path), Json);
             if (contents?.Style is null)
             {
-                error = "That isn't an OpenCrosshair file.";
+                error = Lang.T("That isn't an OpenCrosshair file.");
                 return false;
             }
             style = contents.Style;
@@ -80,7 +80,7 @@ internal static class CrosshairFile
                 {
                     File.Delete(target);
                     style.ImagePath = null;
-                    warning = "The picture in that file couldn't be read, so the drawn crosshair is used instead.";
+                    warning = Lang.T("The picture in that file couldn't be read, so the drawn crosshair is used instead.");
                 }
             }
             style.Clamp();
@@ -88,7 +88,7 @@ internal static class CrosshairFile
         }
         catch (Exception e) when (e is JsonException or FormatException or IOException or UnauthorizedAccessException or NotSupportedException)
         {
-            error = "That file couldn't be read as an OpenCrosshair crosshair.";
+            error = Lang.T("That file couldn't be read as an OpenCrosshair crosshair.");
             return false;
         }
     }

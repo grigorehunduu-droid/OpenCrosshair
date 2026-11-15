@@ -8,6 +8,8 @@ internal sealed class FakeHost : IDesignerHost
     public bool? Paused;
     public void Changed() => Changes++;
     public void SetTheme(AppTheme theme) => ThemeChosen = theme;
+    public string? LanguageChosen = "unset";
+    public void SetLanguage(string? code) => LanguageChosen = code;
     public IReadOnlyList<string> ApplyHotkeys()
     {
         HotkeyApplies++;
