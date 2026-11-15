@@ -15,8 +15,16 @@ of any game running in **borderless/windowed** mode. No ads, no telemetry, no ne
   crosshairs** to start from:
   - lines: 2 to 8 arms, length, thickness, gap, T-style
   - center dot (square or round), circle or arc, shapes (chevron, triangle, square)
-  - a short text label under the crosshair
+  - a short text label under the crosshair, **emoji in full color** 🎯
   - color, opacity, outline, rotation (45° makes an X), soft edges
+- **Guided tour** the first time you open it: a spotlight walks you through the window, with "Try it" steps.
+  Skip it any time, or take it again from **Help**
+- **Undo and redo** (`Ctrl+Z` / `Ctrl+Y`) for every change, a regular **menu bar** with keyboard shortcuts, and a
+  right-click menu on your crosshair list
+- **10 languages:** English, Deutsch, Español, Français, Polski, Português (Brasil), Română, Русский, Türkçe and
+  简体中文. It follows your Windows language, or pick one in **View → Language**
+- **[Community library](library/README.md):** browse crosshairs other players shared and import them with one code;
+  **Help → Share yours in the library** opens a ready-filled form on GitHub
 - **Per-game crosshairs:** link a crosshair to a game and it switches on by itself whenever that game comes to the front
 - **Custom images:** use any PNG (transparency works) or **animated GIF** as your crosshair, scaled 10–400 %
 - **Animations:**
@@ -37,6 +45,10 @@ of any game running in **borderless/windowed** mode. No ads, no telemetry, no ne
 
 ![Ready-made crosshairs](docs/images/presets.png)
 
+### The guided tour
+
+![A "Try it" step of the tour: everything is dimmed except the list of ready-made crosshairs](docs/images/tour.png)
+
 <details>
 <summary>Light theme</summary>
 
@@ -50,7 +62,7 @@ Download one file from [Releases](../../releases) and run it. Nothing gets insta
 | File | For |
 |---|---|
 | `OpenCrosshair.exe` | Most PCs (Windows 10/11, 64-bit). Everything included, about 50 MB. |
-| `OpenCrosshair-small.exe` | Same app, about 600 KB, if you have the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0). Windows offers to download it if it's missing. |
+| `OpenCrosshair-small.exe` | Same app, about 2 MB, if you have the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0). Windows offers to download it if it's missing. |
 | `OpenCrosshair-arm64.exe` | Windows on ARM laptops (e.g. Snapdragon). |
 
 The app lives in the system tray (by the clock): double-click the icon to customize, right-click for options.
@@ -86,9 +98,10 @@ Everything is stored in `%APPDATA%\OpenCrosshair\settings.json`. If that file is
   whole screen. It only checks whether the button is down (no mouse hook) and intercepts nothing.
 - **Images:** files up to 25 MB, shrunk to fit 1024 px. Very long or large animated GIFs are cut short (at most
   300 frames, about 128 MB of memory).
-- **Labels:** emoji aren't supported.
 - **Display scaling above 100 %:** the window is built to scale, but this hasn't been tested on a scaled display yet.
-- English only.
+- **Translations** were written with the help of AI and haven't all been checked by native speakers yet. If something
+  reads oddly, a fix in `src/OpenCrosshair/lang/<language>.json` is very welcome (English text → your translation;
+  `dotnet test` checks that nothing is missing).
 
 See [ROADMAP.md](ROADMAP.md) for what's planned.
 
@@ -107,3 +120,4 @@ The icon is drawn by `tools/make-icon.ps1`.
 ## License
 
 [MIT](LICENSE). OpenCrosshair is an independent project and isn't affiliated with any other crosshair app.
+The libraries it includes for color emoji are listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
