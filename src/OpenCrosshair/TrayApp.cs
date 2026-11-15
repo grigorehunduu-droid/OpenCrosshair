@@ -234,10 +234,13 @@ internal sealed class TrayApp : ApplicationContext, IDesignerHost
     {
         var m = _tray.ContextMenuStrip!;
         m.Items.Clear();
-        var customize = Item(T("Customize…"), false, OpenDesigner);
+        // Grouped: open the window, then what you change while playing, then how the app starts, then Exit.
+        // Theme and language live in the window's View menu. Items show their hotkeys, so they're easy to learn.
+        var customize = Item(T("Customize…"), false, OpenDesigner, _s.Hotkeys["Designer"]);
         customize.Font = new Font(customize.Font, FontStyle.Bold);   // the double-click action, like Windows does it
         m.Items.Add(customize);
-        m.Items.Add(Item(T("Show crosshair"), _s.Visible, ToggleVisible));
+        m.Items.Add(new ToolStripSeparator());
+        m.Items.Add(Item(T("Show crosshair"), _s.Visible, ToggleVisible, _s.Hotkeys["Toggle"]));
 
         var profiles = Item(T("Crosshair"), false, () => { });
         for (int i = 0; i < _s.Profiles.Count; i++)
@@ -269,24 +272,20 @@ internal sealed class TrayApp : ApplicationContext, IDesignerHost
         })
             aim.DropDownItems.Add(Item(label, _s.HideWhileAiming && _s.AimButton == button, () => SetHideWhileAiming(true, button)));
         m.Items.Add(aim);
-        var theme = Item(T("Theme"), false, () => { });
-        foreach (var (value, label) in new[] { (AppTheme.Dark, T("Dark")), (AppTheme.Light, T("Light")), (AppTheme.System, T("Match Windows")) })
-            theme.DropDownItems.Add(Item(label, _s.Theme == value, () => SetTheme(value)));
-        m.Items.Add(theme);
-        var language = Item(T("Language"), false, () => { });
-        language.DropDownItems.Add(Item(T("Match Windows"), _s.Language is null, () => SetLanguage(null)));
-        foreach (var (code, name) in Lang.Available)
-            language.DropDownItems.Add(Item(name, _s.Language == code, () => SetLanguage(code)));
-        m.Items.Add(language);
+        m.Items.Add(new ToolStripSeparator());
         m.Items.Add(Item(T("Start with Windows"), Startup.Enabled, ToggleStartup));
         m.Items.Add(new ToolStripSeparator());
         m.Items.Add(Item(T("Exit"), false, ExitThread));
         m.BackColor = Theme.MenuBack;
     }
 
-    private static ToolStripMenuItem Item(string text, bool isChecked, Action onClick)
+    private static ToolStripMenuItem Item(string text, bool isChecked, Action onClick, string? hotkey = null)
     {
-        var item = new ToolStripMenuItem(text, null, (_, _) => onClick()) { Checked = isChecked, ForeColor = Theme.MenuText };
+        var item = new ToolStripMenuItem(text, null, (_, _) => onClick())
+        {
+            Checked = isChecked, ForeColor = Theme.MenuText,
+            ShortcutKeyDisplayString = string.IsNullOrWhiteSpace(hotkey) ? null : hotkey,   // shown only; the hotkeys themselves are global
+        };
         item.DropDown.BackColor = Theme.MenuBack;
         return item;
     }

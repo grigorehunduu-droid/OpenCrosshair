@@ -79,7 +79,7 @@ public class TourTests
                     ShowWindow(form.Handle, 4);
                     form.StartTour();
                     var tour = form.CurrentTour!;
-                    foreach (int step in new[] { 0, 2, 5, 6 })
+                    foreach (int step in new[] { 0, 2, 5, 7 })
                     {
                         while (tour.Step < step) tour.Next();
                         WaitFor(() => false, 0.6);   // let the spotlight arrive

@@ -65,6 +65,14 @@ internal sealed class DesignerForm : Form
     private Tour? _tour;
     private bool _syncing;   // controls are being filled from settings, so their change events mustn't write back
 
+    // Undo: every crosshair change can be taken back. States are kept as JSON of the crosshair list.
+    private sealed record UndoState(List<CrosshairStyle> Profiles, int Active);
+    private readonly List<string> _undo = [], _redo = [];
+    private string _baseline = "";   // the state on screen now
+    private DateTime _lastRecord;
+    private ToolStripMenuItem? _undoItem, _redoItem;
+    private readonly System.Windows.Forms.Timer _statusTimer = new() { Interval = 5000 };   // how long a message replaces the hotkey hint
+
     public DesignerForm(AppSettings settings, IDesignerHost host)
     {
         _s = settings;
@@ -75,8 +83,8 @@ internal sealed class DesignerForm : Form
         Text = "OpenCrosshair – " + T("customize your crosshair");
         Icon = AppIcon.Large;
         Font = new Font("Segoe UI", 9.5f);
-        ClientSize = new Size(1200, 680);
-        MinimumSize = new Size(1060, 600);
+        ClientSize = new Size(1200, 700);
+        MinimumSize = new Size(1060, 620);
         StartPosition = FormStartPosition.CenterScreen;
 
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 2, Padding = new Padding(10) };
@@ -92,6 +100,10 @@ internal sealed class DesignerForm : Form
         layout.Controls.Add(bottom, 0, 1);
         layout.SetColumnSpan(bottom, 3);
         Controls.Add(layout);
+        var menu = BuildMenu();
+        Controls.Add(menu);   // added after the layout so it docks first, at the very top
+        MainMenuStrip = menu;
+        _statusTimer.Tick += (_, _) => RefreshHotkeyHint();
 
         _list.SelectedIndexChanged += (_, _) =>
         {
@@ -110,6 +122,7 @@ internal sealed class DesignerForm : Form
         FormClosed += (_, _) =>
         {
             _tour?.Dispose();
+            _statusTimer.Dispose();
             _previewTimer.Dispose();
             _sprite?.Dispose();
         };
@@ -138,29 +151,36 @@ internal sealed class DesignerForm : Form
         };
         _tips.SetToolTip(presets, T("Start from a ready-made design, then change anything you like"));
 
-        var buttons = new TableLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, ColumnCount = 3, Margin = new Padding(0) };
-        for (int i = 0; i < 3; i++) buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.3f));
-        foreach (var b in new[] { Button(T("New"), AddNew), Button(T("Copy"), Duplicate), Button(T("Delete"), Delete) })
+        // Two buttons fit every language; Duplicate and the rest are in the list's right-click menu and the File menu.
+        var buttons = new TableLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, ColumnCount = 2, Margin = new Padding(0) };
+        for (int i = 0; i < 2; i++) buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50f));
+        var delete = Button(T("Delete"), Delete);
+        _tips.SetToolTip(delete, T("Deletes this crosshair. Undo brings it back.") + "  (Ctrl+Z)");
+        foreach (var b in new[] { Button(T("New"), AddNew), delete })
         {
             b.Anchor = AnchorStyles.Left | AnchorStyles.Right;
             buttons.Controls.Add(b);
         }
 
-        var library = Link(T("Community library"), () => OpenInBrowser(Community.LibraryUrl));
-        library.Name = "Library";
-        var share = Link(T("Share yours in the library…"), () => OpenInBrowser(Community.ShareUrl(_s.Active)));
-        var tour = Link(T("Take the tour"), StartTour);
-        _tips.SetToolTip(library, T("Opens crosshairs shared by other players on GitHub. Copy a code there, paste it below and press Import."));
-        _tips.SetToolTip(share, T("Opens a form on GitHub with this crosshair's name and share code filled in (needs a free GitHub account)"));
-        _tips.SetToolTip(tour, T("A one-minute guided tour of this window"));
-        var links = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.TopDown, Padding = new Padding(0, 6, 0, 0) };
-        links.Controls.AddRange([library, share, tour]);
+        var listMenu = new ContextMenuStrip { BackColor = Theme.MenuBack };
+        listMenu.Items.AddRange(
+        [
+            MenuItem(T("New crosshair"), AddNew, shortcut: "Ctrl+N"),
+            MenuItem(T("Duplicate"), Duplicate, shortcut: "Ctrl+D"),
+            MenuItem(T("Delete"), Delete),
+            new ToolStripSeparator(),
+            MenuItem(T("Copy share code"), CopyCode),
+        ]);
+        _list.ContextMenuStrip = listMenu;
+        _list.MouseDown += (_, e) =>   // right-click acts on the crosshair under the mouse, like in Explorer
+        {
+            if (e.Button == MouseButtons.Right && _list.IndexFromPoint(e.Location) is >= 0 and var index) _list.SelectedIndex = index;
+        };
 
         var panel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 10, 0) };
         panel.Controls.Add(_list);
         panel.Controls.Add(presets);
         panel.Controls.Add(buttons);
-        panel.Controls.Add(links);
         panel.Controls.Add(Heading(T("Your crosshairs")));
         _tips.SetToolTip(_list, T("Click one to use it. Switch while playing with {0}.", _s.Hotkeys["NextProfile"]));
         return panel;
@@ -222,45 +242,125 @@ internal sealed class DesignerForm : Form
 
     private Control BuildBottom()
     {
-        var bar = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 9, Margin = new Padding(0, 8, 0, 0) };
+        // Only sharing stays down here; files, undo, theme and language are in the menus.
+        var bar = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 4, Margin = new Padding(0, 8, 0, 0) };
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (int i = 0; i < 7; i++) bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.Controls.Add(new Label { Text = T("Share code:"), AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
         bar.Controls.Add(_code, 1, 0);
-        bar.Controls.Add(Button(T("Copy mine"), CopyCode), 2, 0);
+        bar.Controls.Add(Button(T("Copy code"), CopyCode), 2, 0);
         bar.Controls.Add(Button(T("Import"), ImportCode), 3, 0);
-        var saveFile = Button(T("Save file…"), SaveFile);
-        var openFile = Button(T("Open file…"), OpenFile);
-        bar.Controls.Add(saveFile, 4, 0);
-        bar.Controls.Add(openFile, 5, 0);
-        bar.Controls.Add(Button(T("Save as PNG"), ExportPng), 6, 0);
-        _tips.SetToolTip(_code, T("Share codes contain every setting except a custom picture. To share a picture too, use Save file."));
-        _tips.SetToolTip(saveFile, T("Saves this crosshair, including its picture, as one .ochair file you can send to anyone"));
-        _tips.SetToolTip(openFile, T("Adds a crosshair from an .ochair file"));
+        _tips.SetToolTip(_code, T("Share codes contain every setting except a custom picture. To share a picture too, save a crosshair file (File menu)."));
 
-        var language = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150, Anchor = AnchorStyles.Right, Name = "Language" };
-        language.Items.Add(T("Windows language"));
-        foreach (var (_, name) in Lang.Available) language.Items.Add(name);
-        language.SelectedIndex = Array.FindIndex(Lang.Available, l => l.Code == _s.Language) + 1;   // -1 + 1 = Windows language
-        language.SelectedIndexChanged += (_, _) => _host.SetLanguage(language.SelectedIndex == 0 ? null : Lang.Available[language.SelectedIndex - 1].Code);
-        _tips.SetToolTip(language, T("The app's language. Spotted a mistake in a translation? Fixes are welcome on GitHub."));
-        bar.Controls.Add(language, 7, 0);
-
-        var theme = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 140, Anchor = AnchorStyles.Right, Name = "Theme" };
-        theme.Items.AddRange([T("Dark theme"), T("Light theme"), T("Match Windows")]);
-        theme.SelectedIndex = (int)_s.Theme;
-        theme.SelectedIndexChanged += (_, _) => _host.SetTheme((AppTheme)theme.SelectedIndex);
-        bar.Controls.Add(theme, 8, 0);
-
-        _hotkeyHint.ForeColor = Theme.Subtle;
+        _hotkeyHint.Name = "Status";
         bar.Controls.Add(_hotkeyHint, 0, 1);
-        bar.SetColumnSpan(_hotkeyHint, 9);
+        bar.SetColumnSpan(_hotkeyHint, 4);
         return bar;
+    }
+
+    /// <summary>
+    /// The menu bar, like other Windows apps: File (crosshairs and files), Edit (undo, share codes),
+    /// View (theme, language) and Help. Everything has a keyboard path; common commands have shortcuts.
+    /// </summary>
+    /// <summary>A menu item in the theme's colors. <paramref name="shortcut"/> only shows a key that works elsewhere.</summary>
+    private static ToolStripMenuItem MenuItem(string text, Action onClick, Keys keys = Keys.None, string name = "", bool isChecked = false, string? shortcut = null) =>
+        new(text, null, (_, _) => onClick())
+        {
+            ShortcutKeys = keys, ShortcutKeyDisplayString = shortcut, Name = name, Checked = isChecked, ForeColor = Theme.MenuText,
+        };
+
+    private MenuStrip BuildMenu()
+    {
+        ToolStripMenuItem Item(string text, Action onClick, Keys keys = Keys.None, string name = "", bool isChecked = false) =>
+            MenuItem(text, onClick, keys, name, isChecked);
+        ToolStripMenuItem Menu(string text, params ToolStripItem[] items)
+        {
+            var menu = new ToolStripMenuItem(text) { ForeColor = Theme.MenuText };
+            menu.DropDownItems.AddRange(items);
+            menu.DropDown.BackColor = Theme.MenuBack;
+            return menu;
+        }
+
+        var browser = T("Opens in your web browser");
+        var library = Item(T("Community library"), () => OpenInBrowser(Community.LibraryUrl));
+        var share = Item(T("Share yours in the library…"), () => OpenInBrowser(Community.ShareUrl(_s.Active)));
+        var site = Item(T("OpenCrosshair on GitHub"), () => OpenInBrowser(Community.Repository));
+        library.ToolTipText = share.ToolTipText = site.ToolTipText = browser;
+        var save = Item(T("Save as crosshair file…"), SaveFile, Keys.Control | Keys.S);
+        save.ToolTipText = T("Saves this crosshair, including its picture, as one .ochair file you can send to anyone");
+
+        _undoItem = Item(T("Undo"), Undo, Keys.Control | Keys.Z, "Undo");
+        _redoItem = Item(T("Redo"), Redo, Keys.Control | Keys.Y, "Redo");
+        UpdateUndoItems();
+
+        var themes = Menu(T("Theme"), new[] { (AppTheme.Dark, T("Dark")), (AppTheme.Light, T("Light")), (AppTheme.System, T("Match Windows")) }
+            .Select(t => (ToolStripItem)Item(t.Item2, () => _host.SetTheme(t.Item1), name: "Theme" + t.Item1, isChecked: _s.Theme == t.Item1)).ToArray());
+        var languages = Menu(T("Language"), Lang.Available
+            .Select(l => (ToolStripItem)Item(l.Name, () => _host.SetLanguage(l.Code), name: "Language-" + l.Code, isChecked: _s.Language == l.Code))
+            .Prepend(Item(T("Windows language"), () => _host.SetLanguage(null), name: "Language-", isChecked: _s.Language is null)).ToArray());
+        languages.ToolTipText = T("The app's language. Spotted a mistake in a translation? Fixes are welcome on GitHub.");
+
+        var bar = new MenuStrip { Name = "Menu", Padding = new Padding(6, 2, 0, 2) };
+        bar.Items.AddRange(
+        [
+            Menu(T("File"),
+                Item(T("New crosshair"), AddNew, Keys.Control | Keys.N, "FileNew"),
+                Item(T("Duplicate"), Duplicate, Keys.Control | Keys.D, "FileDuplicate"),
+                Item(T("Delete"), Delete, name: "FileDelete"),
+                new ToolStripSeparator(),
+                Item(T("Open crosshair file…"), OpenFile, Keys.Control | Keys.O),
+                save,
+                Item(T("Export as PNG…"), ExportPng, Keys.Control | Keys.E),
+                new ToolStripSeparator(),
+                Item(T("Close window"), Close)),
+            Menu(T("Edit"),
+                _undoItem, _redoItem,
+                new ToolStripSeparator(),
+                Item(T("Copy share code"), CopyCode),
+                Item(T("Import share code"), ImportCode)),
+            Menu(T("View"), themes, languages),
+            Menu(T("Help"),
+                Item(T("Take the tour"), StartTour, Keys.F1),
+                new ToolStripSeparator(),
+                library, share, site,
+                new ToolStripSeparator(),
+                Item(T("About OpenCrosshair"), ShowAbout)),
+        ]);
+        return bar;
+    }
+
+    /// <summary>Hotkey boxes record every key combination, so the menu shortcuts mustn't take them first.</summary>
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData) =>
+        ActiveControl is TextBox { Name: var name } && name.StartsWith("Hotkey") ? false : base.ProcessCmdKey(ref msg, keyData);
+
+    private void ShowAbout()
+    {
+        var version = Application.ProductVersion.Split('+')[0];   // without the build's commit id
+        MessageBox.Show(this,
+            T("OpenCrosshair {0}", version) + "\n\n" + T("Free and open source (MIT license).") + "\n\n"
+            + T("It never connects to the internet and collects no data. Your crosshairs and settings stay on this PC. Links open your web browser only when you click them."),
+            T("About OpenCrosshair"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    /// <summary>Feedback for what just happened, shown for a few seconds where the hotkey hint usually is.</summary>
+    private void Status(string message)
+    {
+        _statusTimer.Stop();
+        _hotkeyHint.Text = message;
+        _hotkeyHint.ForeColor = Theme.Text;
+        _statusTimer.Start();
+        // Screen readers announce it too.
+        _hotkeyHint.AccessibilityObject.RaiseAutomationNotification(
+            System.Windows.Forms.Automation.AutomationNotificationKind.Other,
+            System.Windows.Forms.Automation.AutomationNotificationProcessing.MostRecent, message);
     }
 
     private void RefreshHotkeyHint()
     {
+        _statusTimer.Stop();
+        _hotkeyHint.ForeColor = Theme.Subtle;
         string Key(string action) => string.IsNullOrWhiteSpace(_s.Hotkeys[action]) ? T("(off)") : _s.Hotkeys[action];
         _hotkeyHint.Text = T("Hotkeys:  {0} show/hide   ·   {1} next crosshair   ·   {2} move   ·   {3} back to center   ·   {4} open this window   (change them in the Hotkeys tab)",
             Key("Toggle"), Key("NextProfile"), Key("NudgeUp").Replace("Up", T("Arrows")), Key("ResetOffset"), Key("Designer"));
@@ -590,13 +690,6 @@ internal sealed class DesignerForm : Form
         return b;
     }
 
-    private static LinkLabel Link(string text, Action onClick)
-    {
-        var link = new LinkLabel { Text = text, AutoSize = true, Margin = new Padding(0, 2, 0, 2) };
-        link.LinkClicked += (_, _) => onClick();
-        return link;
-    }
-
     private void OpenInBrowser(string url)
     {
         try { Community.Open(url); }
@@ -640,7 +733,7 @@ internal sealed class DesignerForm : Form
         return
         [
             new(T("Welcome to OpenCrosshair"),
-                T("A one-minute tour of this window. Skip it any time: “{0}” on the left brings it back.", T("Take the tour"))),
+                T("A one-minute tour of this window. Skip it any time; “{0}” in the Help menu brings it back.", T("Take the tour"))),
             new(T("Your crosshairs"), T("Everything you make is saved here. Click a crosshair to put it on screen."), Spot(() => _list)),
             new(T("Try it: add a ready-made one"), T("Open this list and pick any design. It's added to your crosshairs, ready to change."),
                 Spot(() => Named("Presets")), Done: () => _s.Profiles.Count > profiles, Enter: () => profiles = _s.Profiles.Count),
@@ -651,9 +744,11 @@ internal sealed class DesignerForm : Form
                 Spot(() => Named(nameof(CrosshairStyle.Length))), Done: () => _s.Active.Length != length,
                 Enter: () => { Tab(1).Checked = true; length = _s.Active.Length; }),
             new(T("Share with friends"),
-                T("“{0}” puts a code for this crosshair on the clipboard. Paste a friend's code here and press “{1}” to get theirs.", T("Copy mine"), T("Import")),
+                T("“{0}” puts a code for this crosshair on the clipboard. Paste a friend's code here and press “{1}” to get theirs.", T("Copy code"), T("Import")),
                 Spot(() => _code)),
-            new(T("The community library"), T("Browse crosshairs other players shared, or share yours."), Spot(() => Named("Library"))),
+            new(T("Everything else is in the menus"),
+                T("Open and save crosshair files, undo any change with Ctrl+Z, pick a theme or language, and find the community library under Help."),
+                Spot(() => MainMenuStrip)),
             new(T("Hotkeys"), T("These work while you play, even with this window closed. Change them in the “{0}” tab.", T("Hotkeys")), Spot(() => _hotkeyHint)),
             new(T("You're all set"), T("Close this window whenever you like: your crosshair stays on screen, and OpenCrosshair waits in the tray by the clock.")),
         ];
@@ -663,6 +758,12 @@ internal sealed class DesignerForm : Form
 
     /// <summary>Reloads the list after the active crosshair changed elsewhere (tray menu, hotkey).</summary>
     public void SyncFromSettings()
+    {
+        Reload();
+        _baseline = Snapshot();   // not a change made here, so nothing to undo
+    }
+
+    private void Reload()
     {
         _syncing = true;
         _list.BeginUpdate();
@@ -691,6 +792,57 @@ internal sealed class DesignerForm : Form
         _syncing = false;
         RebuildPreview();
         _host.Changed();
+        Record();
+    }
+
+    // ---- undo ------------------------------------------------------------------------------------
+
+    private string Snapshot() => System.Text.Json.JsonSerializer.Serialize(new UndoState(_s.Profiles, _s.ActiveProfile));
+
+    /// <summary>
+    /// Call after a change: the state before it becomes an undo step. Changes less than a second apart
+    /// (dragging a slider, typing a name) make one step; <paramref name="separate"/> always starts a new one.
+    /// </summary>
+    private void Record(bool separate = false)
+    {
+        var now = Snapshot();
+        if (now == _baseline) return;
+        if (separate || DateTime.UtcNow - _lastRecord > TimeSpan.FromSeconds(1))
+        {
+            _undo.Add(_baseline);
+            if (_undo.Count > 100) _undo.RemoveAt(0);
+            _redo.Clear();
+        }
+        _baseline = now;
+        _lastRecord = DateTime.UtcNow;
+        UpdateUndoItems();
+    }
+
+    internal void Undo() => Step(_undo, _redo, T("Undone."));
+    internal void Redo() => Step(_redo, _undo, T("Redone."));
+
+    private void Step(List<string> from, List<string> to, string message)
+    {
+        if (from.Count == 0) return;
+        to.Add(_baseline);
+        _baseline = from[^1];
+        from.RemoveAt(from.Count - 1);
+        var state = System.Text.Json.JsonSerializer.Deserialize<UndoState>(_baseline)!;
+        _s.Profiles = state.Profiles;
+        _s.ActiveProfile = Math.Clamp(state.Active, 0, _s.Profiles.Count - 1);
+        _lastRecord = DateTime.MinValue;   // the next change is a step of its own
+        Reload();
+        _host.Changed();
+        UpdateUndoItems();
+        Status(message);
+    }
+
+    /// <summary>Undo and Redo are only available when there's something to take back.</summary>
+    private void UpdateUndoItems()
+    {
+        if (_undoItem is null || _redoItem is null) return;
+        _undoItem.Enabled = _undo.Count > 0;
+        _redoItem.Enabled = _redo.Count > 0;
     }
 
     private void RebuildPreview()
@@ -707,8 +859,9 @@ internal sealed class DesignerForm : Form
     {
         _s.Profiles.Add(style);
         _s.ActiveProfile = _s.Profiles.Count - 1;
-        SyncFromSettings();
+        Reload();
         _host.Changed();
+        Record(separate: true);
     }
 
     private void AddNew() => AddAndSelect(new CrosshairStyle { Name = T("Crosshair {0}", _s.Profiles.Count + 1) });
@@ -725,21 +878,24 @@ internal sealed class DesignerForm : Form
     {
         if (_s.Profiles.Count == 1)
         {
-            MessageBox.Show(this, T("Keep at least one crosshair."), Text);
+            Status(T("Keep at least one crosshair."));
             return;
         }
-        if (MessageBox.Show(this, T("Delete “{0}”?", _s.Active.Name), Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-            return;
+        // No "are you sure?": deleting is one Ctrl+Z away from undone.
+        var name = _s.Active.Name;
         _s.Profiles.RemoveAt(_s.ActiveProfile);
         _s.ActiveProfile = Math.Min(_s.ActiveProfile, _s.Profiles.Count - 1);
-        SyncFromSettings();
+        Reload();
         _host.Changed();
+        Record(separate: true);
+        Status(T("Deleted “{0}”. Press Ctrl+Z to bring it back.", name));
     }
 
     private void CopyCode()
     {
         _code.Text = _s.Active.ToShareCode();
         Clipboard.SetText(_code.Text);
+        Status(T("Share code copied. Paste it anywhere to share this crosshair."));
     }
 
     private void ImportCode()
@@ -749,6 +905,7 @@ internal sealed class DesignerForm : Form
         {
             AddAndSelect(style);
             _code.Clear();
+            Status(T("Added “{0}”.", style.Name));
         }
         else
         {
@@ -761,7 +918,11 @@ internal sealed class DesignerForm : Form
     {
         using var dialog = new SaveFileDialog { Filter = CrosshairFile.Filter, FileName = _s.Active.Name + CrosshairFile.Extension };
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
-        try { CrosshairFile.Save(dialog.FileName, _s.Active); }
+        try
+        {
+            CrosshairFile.Save(dialog.FileName, _s.Active);
+            Status(T("Saved {0}", Path.GetFileName(dialog.FileName)));
+        }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             MessageBox.Show(this, T("Couldn't save the file: {0}", e.Message), Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -778,6 +939,7 @@ internal sealed class DesignerForm : Form
             return;
         }
         AddAndSelect(style);
+        Status(T("Added “{0}”.", style.Name));
         if (warning is not null) MessageBox.Show(this, warning, Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
@@ -786,7 +948,15 @@ internal sealed class DesignerForm : Form
         using var dialog = new SaveFileDialog { Filter = T("PNG image") + "|*.png", FileName = _s.Active.Name + ".png" };
         if (dialog.ShowDialog(this) != DialogResult.OK) return;
         using var bmp = CrosshairRenderer.Render(_s.Active);
-        bmp.Save(dialog.FileName, ImageFormat.Png);
+        try
+        {
+            bmp.Save(dialog.FileName, ImageFormat.Png);
+            Status(T("Saved {0}", Path.GetFileName(dialog.FileName)));
+        }
+        catch (Exception e) when (e is System.Runtime.InteropServices.ExternalException or IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, T("Couldn't save the file: {0}", e.Message), Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private void DrawPreview(object? sender, PaintEventArgs e)

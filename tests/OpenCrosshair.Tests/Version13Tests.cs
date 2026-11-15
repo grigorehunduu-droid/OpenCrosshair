@@ -174,7 +174,8 @@ public class Version13WindowTests
         var host = new FakeHost();
         using var form = new DesignerForm(new AppSettings(), host);
         form.CreateControl();
-        Find<ComboBox>(form, "Theme").SelectedIndex = 1;
+        Assert.True(MenuTests.Item(form, "ThemeDark").Checked);
+        MenuTests.Item(form, "ThemeLight").PerformClick();   // View > Theme > Light
         Assert.Equal(AppTheme.Light, host.ThemeChosen);
     });
 

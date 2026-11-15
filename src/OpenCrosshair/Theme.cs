@@ -24,7 +24,7 @@ internal static class Theme
     public static void Apply(AppTheme theme)
     {
         IsDark = theme == AppTheme.Dark || (theme == AppTheme.System && WindowsAppsAreDark());
-        ToolStripManager.Renderer = IsDark ? new ToolStripProfessionalRenderer(new DarkMenuColors()) : new ToolStripProfessionalRenderer();
+        ToolStripManager.Renderer = IsDark ? new DarkMenuRenderer() : new ToolStripProfessionalRenderer();
     }
 
     private static bool WindowsAppsAreDark()
@@ -115,11 +115,23 @@ internal static class Theme
         else form.HandleCreated += (_, _) => Apply();
     }
 
+    /// <summary>Menus in the dark colors; submenu arrows in the text color (Windows draws them black).</summary>
+    private sealed class DarkMenuRenderer() : ToolStripProfessionalRenderer(new DarkMenuColors())
+    {
+        protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
+        {
+            e.ArrowColor = Text;
+            base.OnRenderArrow(e);
+        }
+    }
+
     private sealed class DarkMenuColors : ProfessionalColorTable
     {
         private static readonly Color Back = Color.FromArgb(32, 33, 36), Hover = Color.FromArgb(62, 65, 71),
             Line = Color.FromArgb(72, 75, 80), Check = Color.FromArgb(45, 95, 165);
 
+        public override Color MenuStripGradientBegin => Color.FromArgb(30, 31, 34);   // the window's background
+        public override Color MenuStripGradientEnd => Color.FromArgb(30, 31, 34);
         public override Color ToolStripDropDownBackground => Back;
         public override Color ImageMarginGradientBegin => Back;
         public override Color ImageMarginGradientMiddle => Back;

@@ -525,8 +525,9 @@ public class DesignerTests
         Theme.Apply(AppTheme.Dark);
         try
         {
-            var colors = Assert.IsType<ToolStripProfessionalRenderer>(ToolStripManager.Renderer).ColorTable;
+            var colors = Assert.IsAssignableFrom<ToolStripProfessionalRenderer>(ToolStripManager.Renderer).ColorTable;
             Assert.True(colors.ToolStripDropDownBackground.GetBrightness() < 0.2);
+            Assert.True(colors.MenuStripGradientBegin.GetBrightness() < 0.2);   // the window's menu bar too
             Assert.True(Theme.MenuText.GetBrightness() > 0.8);
         }
         finally { Theme.Apply(AppTheme.Light); }

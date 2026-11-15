@@ -114,11 +114,11 @@ public class LangTests
             Assert.Contains(all.OfType<RadioButton>(), r => r.Text == Lang.T("Basics"));
             Assert.DoesNotContain(all.OfType<Button>(), b => b.Text == "Import");
 
-            var picker = all.OfType<ComboBox>().Single(c => c.Name == "Language");
-            Assert.Equal("Deutsch", picker.SelectedItem);
-            picker.SelectedIndex = 0;
+            Assert.True(MenuTests.Item(form, "Language-de").Checked);   // View > Language
+            Assert.Equal("Deutsch", MenuTests.Item(form, "Language-de").Text);
+            MenuTests.Item(form, "Language-").PerformClick();
             Assert.Null(host.LanguageChosen);   // "Windows language"
-            picker.SelectedItem = "Français";
+            MenuTests.Item(form, "Language-fr").PerformClick();
             Assert.Equal("fr", host.LanguageChosen);
         }
         finally { Lang.Apply("en"); }
