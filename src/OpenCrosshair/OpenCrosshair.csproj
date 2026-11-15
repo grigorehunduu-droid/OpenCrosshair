@@ -7,13 +7,16 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <Product>OpenCrosshair</Product>
     <Description>Free, open-source crosshair overlay for Windows.</Description>
+    <ApplicationIcon>app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="OpenCrosshair.Tests" />
+    <!-- Also built in, for the windows and the tray (made by tools/make-icon.ps1) -->
+    <EmbeddedResource Include="app.ico" LogicalName="OpenCrosshair.app.ico" />
   </ItemGroup>
 
 </Project>

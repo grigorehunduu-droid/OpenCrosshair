@@ -3,8 +3,10 @@ using Microsoft.Win32;
 namespace OpenCrosshair;
 
 /// <summary>The running app: tray icon, overlay, hotkeys, timers. Lives until Exit.</summary>
-internal sealed class TrayApp : ApplicationContext
+internal sealed class TrayApp : ApplicationContext, IDesignerHost
 {
+    private readonly ForegroundWatcher _foreground = new();
+    private readonly RegisteredWaitHandle? _openWait;
     private readonly string _path = AppSettings.DefaultPath;
     private readonly AppSettings _s;
     private readonly OverlayWindow _overlay = new();
@@ -20,12 +22,12 @@ internal sealed class TrayApp : ApplicationContext
     private DesignerForm? _designer;
     private bool _aiming;
 
-    public TrayApp()
+    public TrayApp(EventWaitHandle? openSignal = null, bool openDesigner = false)
     {
         bool firstRun = !File.Exists(_path);
         _s = AppSettings.Load(_path);
         Theme.Apply(_s.Theme);
-        _tray = new NotifyIcon { Text = "OpenCrosshair", Icon = MakeTrayIcon(), Visible = true, ContextMenuStrip = new ContextMenuStrip() };
+        _tray = new NotifyIcon { Text = "OpenCrosshair", Icon = AppIcon.Small, Visible = true, ContextMenuStrip = new ContextMenuStrip() };
         _tray.ContextMenuStrip.Opening += (_, e) => { BuildMenu(); e.Cancel = false; };
         _tray.DoubleClick += (_, _) => OpenDesigner();
         BuildMenu();
@@ -40,7 +42,17 @@ internal sealed class TrayApp : ApplicationContext
         _aimTimer.Enabled = _s.HideWhileAiming;
         _animationTimer.Tick += (_, _) => { if (_overlay.Visible) ShowFrame(); };
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
-        RegisterHotkeys();
+        RegisterHotkeys(showProblems: true);
+        _foreground.Changed += OnForegroundChanged;
+        // A second launch (e.g. the taskbar pin) signals this copy; the wait runs on a pool thread, so hop to the UI thread.
+        if (openSignal is not null)
+            _openWait = ThreadPool.RegisterWaitForSingleObject(openSignal, (_, _) => _overlay.BeginInvoke(OpenDesigner), null, -1, false);
+        try
+        {
+            if (Startup.Enabled) Startup.Enabled = true;   // refresh the entry: current location, and start in the tray
+        }
+        catch (Exception e) when (e is UnauthorizedAccessException or System.Security.SecurityException or IOException) { }
+
         if (firstRun)
         {
             _tray.ShowBalloonTip(10000, "OpenCrosshair is running",
@@ -48,6 +60,16 @@ internal sealed class TrayApp : ApplicationContext
                 ToolTipIcon.Info);
             Save();   // so the tip shows only once
         }
+        if (openDesigner) OpenDesigner();
+    }
+
+    /// <summary>Another window came to the front: get back on top right away, and switch to that game's crosshair if one is linked.</summary>
+    private void OnForegroundChanged(IntPtr window)
+    {
+        _overlay.KeepOnTop();
+        if (_foreground.ExeOf(window) is not { } exe) return;
+        int linked = _s.ProfileForGame(exe);
+        if (linked >= 0 && linked != _s.ActiveProfile) SelectProfile(linked);
     }
 
     private void SetTheme(AppTheme theme)
@@ -81,8 +103,9 @@ internal sealed class TrayApp : ApplicationContext
     private void ShowFrame()
     {
         double seconds = _clock.Elapsed.TotalSeconds;
-        // Shoot polls the button state: no mouse hook, nothing is intercepted.
-        if (_s.Active.Animation == CrosshairAnimation.Shoot && (Native.GetAsyncKeyState(Native.VK_LBUTTON) & 0x8000) != 0)
+        // Shoot polls the button state (no mouse hook, nothing is intercepted) and only reacts while a game is in front.
+        if (_s.Active.Animation == CrosshairAnimation.Shoot && (Native.GetAsyncKeyState(Native.VK_LBUTTON) & 0x8000) != 0
+            && _foreground.GameInFront(exe => _s.ProfileForGame(exe) >= 0))
             _lastShot = seconds;
         var oldFrame = _frame;
         var image = _sprite!.Frame(seconds, seconds - _lastShot, out double opacity, out _frame);
@@ -150,7 +173,8 @@ internal sealed class TrayApp : ApplicationContext
         Changed();
     }
 
-    private void RegisterHotkeys()
+    /// <summary>(Re)registers every hotkey from the settings. Empty ones are switched off. Returns the ones that didn't work.</summary>
+    private List<string> RegisterHotkeys(bool showProblems)
     {
         _hotkeys.UnregisterAll();
         var actions = new Dictionary<string, (Action Run, bool Repeat)>
@@ -164,11 +188,28 @@ internal sealed class TrayApp : ApplicationContext
             ["NudgeRight"] = (() => Nudge(1, 0), true),
             ["ResetOffset"] = (() => Nudge(0, 0, reset: true), false),
         };
-        var failed = actions.Where(a => !_hotkeys.Register(_s.Hotkeys[a.Key], a.Value.Run, a.Value.Repeat))
-            .Select(a => $"{a.Key} ({_s.Hotkeys[a.Key]})").ToList();
-        if (failed.Count > 0)
+        var failed = actions
+            .Where(a => !string.IsNullOrWhiteSpace(_s.Hotkeys[a.Key]) && !_hotkeys.Register(_s.Hotkeys[a.Key], a.Value.Run, a.Value.Repeat))
+            .Select(a => $"{AppSettings.HotkeyLabel(a.Key)} ({_s.Hotkeys[a.Key]})").ToList();
+        if (showProblems && failed.Count > 0)
             _tray.ShowBalloonTip(6000, "OpenCrosshair",
                 "These hotkeys are invalid or used by another app: " + string.Join(", ", failed), ToolTipIcon.Warning);
+        return failed;
+    }
+
+    // ---- what the customize window asks of the app ----
+    void IDesignerHost.Changed() => Changed();
+    void IDesignerHost.SetTheme(AppTheme theme) => SetTheme(theme);
+    IReadOnlyList<string> IDesignerHost.ApplyHotkeys()
+    {
+        var failed = RegisterHotkeys(showProblems: false);
+        Save();
+        return failed;
+    }
+    void IDesignerHost.PauseHotkeys(bool paused)
+    {
+        if (paused) _hotkeys.UnregisterAll();   // so the keys can be pressed into the hotkey boxes
+        else RegisterHotkeys(showProblems: false);
     }
 
     private void BuildMenu()
@@ -241,27 +282,18 @@ internal sealed class TrayApp : ApplicationContext
             _designer.Activate();
             return;
         }
-        _designer = new DesignerForm(_s, Changed, SetTheme);
+        _designer = new DesignerForm(_s, this);
         _designer.Show();
     }
 
     // SystemEvents can fire on another thread; hop back to the UI thread.
     private void OnDisplaySettingsChanged(object? sender, EventArgs e) => _overlay.BeginInvoke(Redraw);
 
-    private static Icon MakeTrayIcon()
-    {
-        using var mark = CrosshairRenderer.Draw(new CrosshairStyle { Length = 6, Thickness = 3, Gap = 3, DotSize = 3 });
-        using var canvas = new Bitmap(32, 32);
-        using (var g = Graphics.FromImage(canvas))
-            g.DrawImage(mark, (32 - mark.Width) / 2, (32 - mark.Height) / 2, mark.Width, mark.Height);
-        IntPtr handle = canvas.GetHicon();
-        try { return (Icon)Icon.FromHandle(handle).Clone(); }
-        finally { Native.DestroyIcon(handle); }
-    }
-
     protected override void ExitThreadCore()
     {
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
+        _openWait?.Unregister(null);
+        _foreground.Dispose();
         _onTopTimer.Dispose();
         _aimTimer.Dispose();
         _animationTimer.Dispose();

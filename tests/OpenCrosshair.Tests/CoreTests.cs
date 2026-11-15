@@ -419,6 +419,7 @@ public class HotkeyTests
     public void RejectsInvalid(string text) => Assert.False(HotkeyManager.TryParse(text, out _, out _));
 }
 
+[Collection("UI")]   // these and Version13WindowTests switch the theme, so they must not run at the same time
 public class DesignerTests
 {
     /// <summary>WinForms needs an STA thread; xUnit runs tests on MTA threads.</summary>
@@ -442,29 +443,29 @@ public class DesignerTests
     public void SyncingFromOutsideDoesNotEchoAChange() => RunSta(() =>
     {
         var s = new AppSettings();
-        int changes = 0;
-        using var form = new DesignerForm(s, () => changes++);
+        var host = new FakeHost();
+        using var form = new DesignerForm(s, host);
         form.CreateControl();
         s.Profiles.Add(new CrosshairStyle { Name = "Second", Gap = 9 });
         s.ActiveProfile = 1;
         form.SyncFromSettings();
-        Assert.Equal(0, changes);
-        Assert.Equal(9, Find<NumericUpDown>(form, "Gap").Value);   // controls show the newly active crosshair
+        Assert.Equal(0, host.Changes);
+        Assert.Equal(9, Find<NumberBox>(form, "Gap").Value);   // controls show the newly active crosshair
     });
 
     [Fact]
     public void ControlsChangeTheCrosshair() => RunSta(() =>
     {
         var s = new AppSettings();
-        int changes = 0;
-        using var form = new DesignerForm(s, () => changes++);
+        var host = new FakeHost();
+        using var form = new DesignerForm(s, host);
         form.CreateControl();
 
-        var gap = Find<NumericUpDown>(form, "Gap");
+        var gap = Find<NumberBox>(form, "Gap");
         Assert.Equal(3, gap.Value);
         gap.Value = 7;
         Assert.Equal(7, s.Active.Gap);
-        Assert.Equal(1, changes);
+        Assert.Equal(1, host.Changes);
         Assert.Equal(7, Find<TrackBar>(form, "GapSlider").Value);   // slider and number box stay in step
 
         Find<TrackBar>(form, "LengthSlider").Value = 20;
@@ -484,7 +485,7 @@ public class DesignerTests
     public void PresetsAddANamedCrosshair() => RunSta(() =>
     {
         var s = new AppSettings();
-        using var form = new DesignerForm(s, () => { });
+        using var form = new DesignerForm(s, new FakeHost());
         form.CreateControl();
         var presets = Find<ComboBox>(form, "Presets");
         presets.SelectedIndex = presets.Items.IndexOf("Dot only");
@@ -516,7 +517,7 @@ public class DesignerTests
         {
             var s = new AppSettings();
             s.Profiles[0].Color = Color.Lime;
-            using var form = new DesignerForm(s, () => { });
+            using var form = new DesignerForm(s, new FakeHost());
             form.CreateControl();
             Assert.True(form.BackColor.GetBrightness() < 0.2);
             Assert.True(Find<TextBox>(form, "Name").BackColor.GetBrightness() < 0.25);
@@ -550,7 +551,7 @@ public class DesignerTests
                 var s = new AppSettings();
                 s.Profiles[0].DotSize = 2;
                 s.Profiles.Add(new CrosshairStyle { Name = "Sniper", Length = 12, Gap = 5, CircleRadius = 16 });
-                using var form = new DesignerForm(s, () => { }, _ => { }) { StartPosition = FormStartPosition.Manual, Location = new Point(-5000, -5000) };
+                using var form = new DesignerForm(s, new FakeHost()) { StartPosition = FormStartPosition.Manual, Location = new Point(-5000, -5000) };
                 form.CreateControl();
                 ShowWindow(form.Handle, 4);   // SW_SHOWNOACTIVATE
                 foreach (var tab in new[] { "Basics", "Lines", "Animation" })
@@ -565,6 +566,35 @@ public class DesignerTests
             }
             Theme.Apply(AppTheme.Light);
         });
+        SavePresetGallery(Path.Combine(dir, "presets.png"));
+    }
+
+    /// <summary>The ready-made crosshairs side by side, 3× zoom, for the README.</summary>
+    private static void SavePresetGallery(string path)
+    {
+        const int columns = 3, tileW = 200, tileH = 170, gap = 10;
+        var presets = DesignerForm.Presets;
+        int rows = (presets.Length + columns - 1) / columns;
+        using var sheet = new Bitmap(columns * (tileW + gap) + gap, rows * (tileH + gap) + gap);
+        using var g = Graphics.FromImage(sheet);
+        g.Clear(Color.FromArgb(22, 23, 26));
+        using var font = new Font("Segoe UI", 10f);
+        using var tileBrush = new SolidBrush(Color.FromArgb(40, 44, 52));
+        for (int i = 0; i < presets.Length; i++)
+        {
+            int x = gap + i % columns * (tileW + gap), y = gap + i / columns * (tileH + gap);
+            g.FillRectangle(tileBrush, x, y, tileW, tileH);
+            using var crosshair = CrosshairRenderer.Draw(presets[i].Style);
+            int zoom = Math.Min(3, 120 / crosshair.Width);
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+            int size = crosshair.Width * zoom;
+            g.DrawImage(crosshair, x + (tileW - size) / 2, y + (135 - size) / 2, size, size);
+            var label = presets[i].Name + (presets[i].Style.Animation == CrosshairAnimation.None ? "" : " (animated)");
+            TextRenderer.DrawText(g, label, font, new Rectangle(x, y + 135, tileW, 30), Color.FromArgb(220, 220, 220),
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+        }
+        sheet.Save(path);
     }
 
     private static IEnumerable<Control> Controls(Control parent) =>

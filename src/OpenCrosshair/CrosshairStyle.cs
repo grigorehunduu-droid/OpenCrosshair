@@ -53,7 +53,15 @@ internal sealed class CrosshairStyle
     [Category("Animation"), Description("1 (slowest: a 4 s cycle, or 1.2 s to recover after a shot) to 10 (fastest)")]
     public int AnimationSpeed { get; set; } = 3;
 
-    public CrosshairStyle Clone() => (CrosshairStyle)MemberwiseClone();
+    [Category("Games"), Description("Programs (like cs2.exe) that switch to this crosshair automatically when they come to the front")]
+    public List<string>? Games { get; set; }
+
+    public CrosshairStyle Clone()
+    {
+        var copy = (CrosshairStyle)MemberwiseClone();
+        copy.Games = Games?.ToList();   // a real copy, so editing one crosshair's games doesn't change the other's
+        return copy;
+    }
 
     /// <summary>Forces every value into range. Settings files and share codes are untrusted input.</summary>
     public void Clamp()
@@ -81,6 +89,8 @@ internal sealed class CrosshairStyle
         ImageScalePercent = Math.Clamp(ImageScalePercent, 10, 400);
         if (!Enum.IsDefined(Animation)) Animation = CrosshairAnimation.None;
         AnimationSpeed = Math.Clamp(AnimationSpeed, 1, 10);
+        Games = Games?.Select(g => Shorten(g, 100)?.ToLowerInvariant()).OfType<string>().Distinct().Take(20).ToList();
+        if (Games is { Count: 0 }) Games = null;
     }
 
     private static string? Shorten(string? text, int max) =>
@@ -94,6 +104,7 @@ internal sealed class CrosshairStyle
     {
         var copy = Clone();
         copy.ImagePath = null;   // a local path would leak the sharer's folder names and is useless to others
+        copy.Games = null;       // which games you link is your business
         using var packed = new MemoryStream();
         using (var deflate = new DeflateStream(packed, CompressionLevel.SmallestSize))
             deflate.Write(JsonSerializer.SerializeToUtf8Bytes(copy, ShareJson));
@@ -136,6 +147,7 @@ internal sealed class CrosshairStyle
             var parsed = JsonSerializer.Deserialize<CrosshairStyle>(json.AsSpan(0, read), ShareJson);
             if (parsed is null) return false;
             parsed.ImagePath = null;
+            parsed.Games = null;
             parsed.Clamp();
             style = parsed;
             return true;

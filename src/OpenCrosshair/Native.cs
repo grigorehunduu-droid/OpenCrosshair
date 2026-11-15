@@ -31,6 +31,20 @@ internal static class Native
     public static extern bool RegisterHotKey(IntPtr hwnd, int id, uint modifiers, uint vk);
     [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr hwnd, int id);
     [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vk);
-    [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr icon);
     [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+    // Foreground tracking (back on top instantly, per-game crosshairs, Shoot only in games)
+    public const uint EVENT_SYSTEM_FOREGROUND = 0x0003, WINEVENT_OUTOFCONTEXT = 0x0000, WINEVENT_SKIPOWNPROCESS = 0x0002;
+    public delegate void WinEventProc(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr module, WinEventProc callback, uint process, uint thread, uint flags);
+    [DllImport("user32.dll")] public static extern bool UnhookWinEvent(IntPtr hook);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hwnd, System.Text.StringBuilder name, int max);
+
+    // Dark scrollbars for the dark theme
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)] public static extern int SetWindowTheme(IntPtr hwnd, string? appName, string? idList);
 }

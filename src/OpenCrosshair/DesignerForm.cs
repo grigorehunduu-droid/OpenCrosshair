@@ -4,13 +4,25 @@ using System.Drawing.Imaging;
 
 namespace OpenCrosshair;
 
+/// <summary>What the customize window needs from the running app.</summary>
+internal interface IDesignerHost
+{
+    /// <summary>A crosshair setting changed: redraw it on screen and save.</summary>
+    void Changed();
+    void SetTheme(AppTheme theme);
+    /// <summary>Re-registers the hotkeys from the settings and saves; returns the ones that couldn't be used.</summary>
+    IReadOnlyList<string> ApplyHotkeys();
+    /// <summary>While a hotkey box is focused the hotkeys are paused, so their keys can be typed into it.</summary>
+    void PauseHotkeys(bool paused);
+}
+
 /// <summary>
 /// The "customize" window: saved crosshairs and presets on the left, a live preview in the middle,
 /// settings in sections on the right (plain labels, sliders, color swatches, hover tips), share codes at the bottom.
 /// </summary>
 internal sealed class DesignerForm : Form
 {
-    private static readonly (string Name, CrosshairStyle Style)[] Presets =
+    internal static readonly (string Name, CrosshairStyle Style)[] Presets =
     [
         ("Classic cross", new CrosshairStyle()),
         ("Cross with dot", new CrosshairStyle { Gap = 4, DotSize = 2 }),
@@ -34,8 +46,9 @@ internal sealed class DesignerForm : Form
     ];
 
     private readonly AppSettings _s;
-    private readonly Action _changed;
-    private readonly Action<AppTheme>? _setTheme;
+    private readonly IDesignerHost _host;
+    private readonly Label _hotkeyHint = new() { AutoSize = true, Margin = new Padding(0, 8, 0, 0), Tag = "subtle" };
+    private readonly Label _hotkeyStatus = new() { AutoSize = true, MaximumSize = new Size(320, 0), Tag = "subtle" };
     private readonly ListBox _list = new() { Dock = DockStyle.Fill, IntegralHeight = false, BorderStyle = BorderStyle.FixedSingle };
     private readonly PictureBox _preview = new() { Dock = DockStyle.Fill, BackColor = Color.FromArgb(40, 44, 52) };
     private readonly TextBox _code = new() { Dock = DockStyle.Fill, PlaceholderText = "Paste a share code here, then press Import" };
@@ -47,21 +60,24 @@ internal sealed class DesignerForm : Form
     private CrosshairSprite? _sprite;
     private bool _syncing;   // controls are being filled from settings, so their change events mustn't write back
 
-    public DesignerForm(AppSettings settings, Action changed, Action<AppTheme>? setTheme = null)
+    public DesignerForm(AppSettings settings, IDesignerHost host)
     {
         _s = settings;
-        _changed = changed;
-        _setTheme = setTheme;
+        _host = host;
+        // Sizes below are for 100 % display scaling; WinForms grows everything to match the actual scaling.
+        AutoScaleDimensions = new SizeF(96f, 96f);
+        AutoScaleMode = AutoScaleMode.Dpi;
         Text = "OpenCrosshair – customize your crosshair";
+        Icon = AppIcon.Large;
         Font = new Font("Segoe UI", 9.5f);
-        ClientSize = new Size(1140, 660);
-        MinimumSize = new Size(1000, 580);
+        ClientSize = new Size(1200, 680);
+        MinimumSize = new Size(1060, 600);
         StartPosition = FormStartPosition.CenterScreen;
 
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 2, Padding = new Padding(10) };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 480));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 540));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.Controls.Add(BuildCrosshairList(), 0, 0);
@@ -77,7 +93,7 @@ internal sealed class DesignerForm : Form
             if (_syncing || _list.SelectedIndex < 0 || _list.SelectedIndex == _s.ActiveProfile) return;
             _s.ActiveProfile = _list.SelectedIndex;
             ShowActive();
-            _changed();
+            _host.Changed();
         };
         _preview.Paint += DrawPreview;
         _preview.Resize += (_, _) => _preview.Invalidate();
@@ -88,6 +104,8 @@ internal sealed class DesignerForm : Form
             _sprite?.Dispose();
         };
         Theme.Style(this);   // before SyncFromSettings, which paints the color swatches
+        Theme.Style(_tips);
+        RefreshHotkeyHint();
         SyncFromSettings();
     }
 
@@ -149,6 +167,7 @@ internal sealed class DesignerForm : Form
         {
             ("Basics", BasicsSection()), ("Lines", LinesSection()), ("Dot & circle", DotSection()),
             ("Shapes & text", ExtrasSection()), ("Image", ImageSection()), ("Animation", AnimationSection()),
+            ("Hotkeys", HotkeysSection()),
         };
         foreach (var (title, section) in sections)
         {
@@ -181,34 +200,41 @@ internal sealed class DesignerForm : Form
 
     private Control BuildBottom()
     {
-        var bar = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 7, Margin = new Padding(0, 8, 0, 0) };
+        var bar = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 9, Margin = new Padding(0, 8, 0, 0) };
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (int i = 0; i < 5; i++) bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        for (int i = 0; i < 7; i++) bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.Controls.Add(new Label { Text = "Share code:", AutoSize = true, Anchor = AnchorStyles.Left }, 0, 0);
         bar.Controls.Add(_code, 1, 0);
         bar.Controls.Add(Button("Copy mine", CopyCode), 2, 0);
         bar.Controls.Add(Button("Import", ImportCode), 3, 0);
-        bar.Controls.Add(Button("Save as PNG", ExportPng), 4, 0);
-        _tips.SetToolTip(_code, "Share codes contain every setting except a custom image file");
+        var saveFile = Button("Save file…", SaveFile);
+        var openFile = Button("Open file…", OpenFile);
+        bar.Controls.Add(saveFile, 4, 0);
+        bar.Controls.Add(openFile, 5, 0);
+        bar.Controls.Add(Button("Save as PNG", ExportPng), 6, 0);
+        _tips.SetToolTip(_code, "Share codes contain every setting except a custom picture. To share a picture too, use Save file.");
+        _tips.SetToolTip(saveFile, "Saves this crosshair, including its picture, as one .ochair file you can send to anyone");
+        _tips.SetToolTip(openFile, "Adds a crosshair from an .ochair file");
 
-        var theme = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 140, Anchor = AnchorStyles.Right };
+        var theme = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 140, Anchor = AnchorStyles.Right, Name = "Theme" };
         theme.Items.AddRange(["Dark theme", "Light theme", "Match Windows"]);
         theme.SelectedIndex = (int)_s.Theme;
-        theme.SelectedIndexChanged += (_, _) => _setTheme?.Invoke((AppTheme)theme.SelectedIndex);
-        theme.Enabled = _setTheme is not null;
-        bar.Controls.Add(theme, 6, 0);
+        theme.SelectedIndexChanged += (_, _) => _host.SetTheme((AppTheme)theme.SelectedIndex);
+        bar.Controls.Add(theme, 8, 0);
 
-        var h = _s.Hotkeys;
-        var hotkeys = new Label
-        {
-            AutoSize = true, Margin = new Padding(0, 8, 0, 0), ForeColor = Theme.Subtle, Tag = "subtle",
-            Text = $"Hotkeys:  {h["Toggle"]} show/hide   ·   {h["NextProfile"]} next crosshair   ·   {h["NudgeUp"].Replace("Up", "Arrows")} move   ·   "
-                + $"{h["ResetOffset"]} back to center   ·   {h["Designer"]} open this window",
-        };
-        bar.Controls.Add(hotkeys, 0, 1);
-        bar.SetColumnSpan(hotkeys, 7);
+        _hotkeyHint.ForeColor = Theme.Subtle;
+        bar.Controls.Add(_hotkeyHint, 0, 1);
+        bar.SetColumnSpan(_hotkeyHint, 9);
         return bar;
+    }
+
+    private void RefreshHotkeyHint()
+    {
+        string Key(string action) => string.IsNullOrWhiteSpace(_s.Hotkeys[action]) ? "(off)" : _s.Hotkeys[action];
+        _hotkeyHint.Text = $"Hotkeys:  {Key("Toggle")} show/hide   ·   {Key("NextProfile")} next crosshair   ·   "
+            + $"{Key("NudgeUp").Replace("Up", "Arrows")} move   ·   {Key("ResetOffset")} back to center   ·   {Key("Designer")} open this window"
+            + "   (change them in the Hotkeys tab)";
     }
 
     // ---- settings sections -----------------------------------------------------------------------
@@ -224,7 +250,106 @@ internal sealed class DesignerForm : Form
         Row(t, "Outline color", ColorPicker(nameof(CrosshairStyle.OutlineColor), s => s.OutlineColor, (s, v) => s.OutlineColor = v));
         Row(t, "Rotation", Slider(nameof(CrosshairStyle.Rotation), 0, 359, "°", s => s.Rotation, (s, v) => s.Rotation = v));
         Row(t, "Soft edges", Slider(nameof(CrosshairStyle.Blur), 0, 10, "px", s => s.Blur, (s, v) => s.Blur = v));
+        Row(t, "Use in games", GamesPicker(), nameof(CrosshairStyle.Games));
         return t;
+    }
+
+    /// <summary>Links this crosshair to games: it's switched to automatically when one of them comes to the front.</summary>
+    private Control GamesPicker()
+    {
+        var games = new Label { AutoSize = true, MaximumSize = new Size(360, 0), Name = "GamesList", Margin = new Padding(0, 6, 0, 4) };
+        var link = Button("Link a running game…", () =>
+        {
+            using var picker = new GamePicker();
+            if (picker.ShowDialog(this) == DialogResult.OK && picker.Chosen is { } exe) LinkGame(exe);
+        });
+        var browse = Button("Choose its .exe…", () =>
+        {
+            using var dialog = new OpenFileDialog { Filter = "Programs (*.exe)|*.exe" };
+            if (dialog.ShowDialog(this) == DialogResult.OK) LinkGame(Path.GetFileName(dialog.FileName));
+        });
+        var clear = Button("Unlink all", () =>
+        {
+            _s.Active.Games = null;
+            Apply();
+            ShowGames();
+        });
+        void ShowGames() => games.Text = _s.Active.Games is { Count: > 0 } list
+            ? "Switches to this crosshair in: " + string.Join(", ", list)
+            : "Not linked to any game.";
+        void LinkGame(string exe)
+        {
+            exe = exe.ToLowerInvariant();
+            foreach (var other in _s.Profiles) other.Games?.Remove(exe);   // a game belongs to one crosshair
+            (_s.Active.Games ??= []).Add(exe);
+            Apply();
+            ShowGames();
+        }
+        _refreshers.Add(ShowGames);
+        var buttons = new FlowLayoutPanel { AutoSize = true, WrapContents = true, Margin = new Padding(0) };
+        buttons.Controls.AddRange([link, browse, clear]);
+        var panel = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = new Padding(0) };
+        panel.Controls.AddRange([games, buttons]);
+        return panel;
+    }
+
+    private TableLayoutPanel HotkeysSection()
+    {
+        var t = Section();
+        foreach (var action in AppSettings.DefaultHotkeys.Keys) Row(t, AppSettings.HotkeyLabel(action), HotkeyBox(action));
+        var reset = Button("Back to the defaults", () =>
+        {
+            foreach (var (action, combo) in AppSettings.DefaultHotkeys) _s.Hotkeys[action] = combo;
+            ApplyHotkeys();
+            ShowActive();
+        });
+        reset.Anchor = AnchorStyles.Left;
+        Row(t, "", reset);
+        _hotkeyStatus.ForeColor = Theme.Subtle;
+        _hotkeyStatus.Text = "Click a box, then press the keys you want. Backspace switches a hotkey off.";
+        Row(t, "", _hotkeyStatus);
+        return t;
+    }
+
+    /// <summary>A box that records the key combination you press (e.g. Ctrl+Alt+H).</summary>
+    private Control HotkeyBox(string action)
+    {
+        var box = new TextBox { ReadOnly = true, Name = "Hotkey" + action, ShortcutsEnabled = false, Cursor = Cursors.Hand };
+        box.GotFocus += (_, _) => _host.PauseHotkeys(true);
+        box.LostFocus += (_, _) => _host.PauseHotkeys(false);
+        box.KeyDown += (_, e) =>
+        {
+            e.SuppressKeyPress = true;   // nothing gets typed; also stops the "ding"
+            if (e.KeyCode is Keys.Back or Keys.Delete)
+            {
+                _s.Hotkeys[action] = "";
+                box.Text = "";
+                ApplyHotkeys();
+                return;
+            }
+            if (e.KeyCode is Keys.ControlKey or Keys.ShiftKey or Keys.Menu or Keys.LWin or Keys.RWin or Keys.Tab) return;
+            if (!e.Control && !e.Alt && !e.Shift)
+            {
+                _hotkeyStatus.Text = "Add Ctrl, Alt or Shift, so the key still works normally in games.";
+                return;
+            }
+            var combo = string.Join("+", new[] { e.Control ? "Ctrl" : null, e.Alt ? "Alt" : null, e.Shift ? "Shift" : null, e.KeyCode.ToString() }.OfType<string>());
+            _s.Hotkeys[action] = combo;
+            box.Text = combo;
+            ApplyHotkeys();
+        };
+        _refreshers.Add(() => box.Text = _s.Hotkeys[action]);
+        return box;
+    }
+
+    private void ApplyHotkeys()
+    {
+        var failed = _host.ApplyHotkeys();   // registers them, which is how a clash with another app shows up
+        if (ActiveControl is TextBox { Name: var name } && name.StartsWith("Hotkey")) _host.PauseHotkeys(true);   // still typing into a box
+        _hotkeyStatus.Text = failed.Count == 0
+            ? "Saved. Your hotkeys are active."
+            : "Saved, but these are used by another app, so they don't work: " + string.Join(", ", failed);
+        RefreshHotkeyHint();
     }
 
     private TableLayoutPanel LinesSection()
@@ -345,7 +470,7 @@ internal sealed class DesignerForm : Form
             Minimum = min, Maximum = max, TickStyle = TickStyle.None, AutoSize = false, Height = 30, Dock = DockStyle.Fill,
             Name = property + "Slider", LargeChange = Math.Max(1, (max - min) / 10), AccessibleName = property,
         };
-        var number = new NumericUpDown { Minimum = min, Maximum = max, Width = 64, Dock = DockStyle.Right, Name = property };
+        var number = new NumberBox { Minimum = min, Maximum = max, Width = 50, Dock = DockStyle.Right, Name = property };
         var units = new Label { Text = unit, Width = 26, Dock = DockStyle.Right, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(4, 0, 0, 0) };
         var panel = new Panel { Height = 32, Name = property, Margin = new Padding(0, 2, 0, 2) };
         panel.Controls.Add(bar);
@@ -354,9 +479,9 @@ internal sealed class DesignerForm : Form
         bar.ValueChanged += (_, _) => number.Value = bar.Value;
         number.ValueChanged += (_, _) =>
         {
-            bar.Value = (int)number.Value;
+            bar.Value = number.Value;
             if (_syncing) return;
-            set(_s.Active, (int)number.Value);
+            set(_s.Active, number.Value);
             Apply();
         };
         _refreshers.Add(() => number.Value = Math.Clamp(get(_s.Active), min, max));
@@ -465,7 +590,7 @@ internal sealed class DesignerForm : Form
         _list.Items[_s.ActiveProfile] = _s.Active.Name;
         _syncing = false;
         RebuildPreview();
-        _changed();
+        _host.Changed();
     }
 
     private void RebuildPreview()
@@ -483,7 +608,7 @@ internal sealed class DesignerForm : Form
         _s.Profiles.Add(style);
         _s.ActiveProfile = _s.Profiles.Count - 1;
         SyncFromSettings();
-        _changed();
+        _host.Changed();
     }
 
     private void AddNew() => AddAndSelect(new CrosshairStyle { Name = $"Crosshair {_s.Profiles.Count + 1}" });
@@ -508,7 +633,7 @@ internal sealed class DesignerForm : Form
         _s.Profiles.RemoveAt(_s.ActiveProfile);
         _s.ActiveProfile = Math.Min(_s.ActiveProfile, _s.Profiles.Count - 1);
         SyncFromSettings();
-        _changed();
+        _host.Changed();
     }
 
     private void CopyCode()
@@ -530,6 +655,30 @@ internal sealed class DesignerForm : Form
             MessageBox.Show(this, "That isn't a valid OpenCrosshair share code (it should start with OC2: or OC1:).", Text,
                 MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
+    }
+
+    private void SaveFile()
+    {
+        using var dialog = new SaveFileDialog { Filter = CrosshairFile.Filter, FileName = _s.Active.Name + CrosshairFile.Extension };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        try { CrosshairFile.Save(dialog.FileName, _s.Active); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, "Couldn't save the file: " + e.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+    }
+
+    private void OpenFile()
+    {
+        using var dialog = new OpenFileDialog { Filter = CrosshairFile.Filter };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        if (!CrosshairFile.TryOpen(dialog.FileName, CrosshairFile.DefaultImagesFolder, out var style, out var error, out var warning))
+        {
+            MessageBox.Show(this, error, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        AddAndSelect(style);
+        if (warning is not null) MessageBox.Show(this, warning, Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private void ExportPng()

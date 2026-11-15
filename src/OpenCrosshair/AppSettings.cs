@@ -38,7 +38,25 @@ internal sealed class AppSettings
         ["ResetOffset"] = "Ctrl+Alt+R",
     };
 
+    private static readonly IReadOnlyDictionary<string, string> HotkeyLabels = new Dictionary<string, string>
+    {
+        ["Toggle"] = "Show / hide",
+        ["NextProfile"] = "Next crosshair",
+        ["Designer"] = "Open the customize window",
+        ["NudgeUp"] = "Move up 1 px",
+        ["NudgeDown"] = "Move down 1 px",
+        ["NudgeLeft"] = "Move left 1 px",
+        ["NudgeRight"] = "Move right 1 px",
+        ["ResetOffset"] = "Back to the exact center",
+    };
+
+    public static string HotkeyLabel(string action) => HotkeyLabels.GetValueOrDefault(action, action);
+
     [JsonIgnore] public CrosshairStyle Active => Profiles[ActiveProfile];
+
+    /// <summary>Index of the crosshair linked to a game's program file (e.g. "cs2.exe"), or -1.</summary>
+    public int ProfileForGame(string exe) =>
+        Profiles.FindIndex(p => p.Games?.Contains(exe, StringComparer.OrdinalIgnoreCase) == true);
 
     public static string DefaultPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "OpenCrosshair", "settings.json");
@@ -99,7 +117,7 @@ internal static class Startup
         set
         {
             using var key = Registry.CurrentUser.CreateSubKey(RunKey);
-            if (value) key.SetValue(ValueName, $"\"{Environment.ProcessPath}\"");
+            if (value) key.SetValue(ValueName, $"\"{Environment.ProcessPath}\" {Program.TrayArgument}");
             else key.DeleteValue(ValueName, throwOnMissingValue: false);
         }
     }

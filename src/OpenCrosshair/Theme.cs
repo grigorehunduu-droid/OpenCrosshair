@@ -40,15 +40,11 @@ internal static class Theme
         if (root is Form form) DarkTitleBar(form);
         foreach (var c in Descendants(root).Prepend(root))
         {
+            if (c is ListBox or TextBox or ComboBox or ScrollableControl { AutoScroll: true }) DarkScrollbars(c);
             if (c.Tag is "keep") continue;
             switch (c)
             {
                 case TextBox or ListBox:
-                    c.BackColor = Field;
-                    c.ForeColor = Text;
-                    break;
-                case NumericUpDown number:
-                    number.BorderStyle = BorderStyle.FixedSingle;
                     c.BackColor = Field;
                     c.ForeColor = Text;
                     break;
@@ -74,6 +70,31 @@ internal static class Theme
                     break;
             }
         }
+    }
+
+    /// <summary>Tooltips are drawn by the app in the dark theme (Windows only draws them light).</summary>
+    public static void Style(ToolTip tips)
+    {
+        if (!IsDark) return;
+        tips.OwnerDraw = true;
+        tips.Draw += (_, e) =>
+        {
+            using var back = new SolidBrush(Field);
+            using var border = new Pen(Border);
+            e.Graphics.FillRectangle(back, e.Bounds);
+            e.Graphics.DrawRectangle(border, e.Bounds.X, e.Bounds.Y, e.Bounds.Width - 1, e.Bounds.Height - 1);
+            TextRenderer.DrawText(e.Graphics, e.ToolTipText, e.Font, e.Bounds, Text,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        };
+    }
+
+    /// <summary>Windows' own dark style for scrollbars (and drop-down lists); the rest of the control keeps the app's colors.</summary>
+    private static void DarkScrollbars(Control c)
+    {
+        string style = c is ComboBox ? "DarkMode_CFD" : "DarkMode_Explorer";
+        void Apply() => Native.SetWindowTheme(c.Handle, style, null);
+        if (c.IsHandleCreated) Apply();
+        else c.HandleCreated += (_, _) => Apply();
     }
 
     private static IEnumerable<Control> Descendants(Control parent) =>
