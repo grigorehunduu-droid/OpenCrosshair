@@ -59,6 +59,10 @@ internal static class Theme
                     c.BackColor = ButtonBack;
                     c.ForeColor = Text;
                     break;
+                case LinkLabel link:
+                    link.LinkColor = link.ActiveLinkColor = link.VisitedLinkColor = Color.FromArgb(110, 170, 255);
+                    c.BackColor = Back;
+                    break;
                 case CheckBox box:
                     box.FlatStyle = FlatStyle.Flat;
                     c.BackColor = Back;

@@ -135,10 +135,18 @@ internal sealed class DesignerForm : Form
             buttons.Controls.Add(b);
         }
 
+        var library = Link("Community library", () => OpenInBrowser(Community.LibraryUrl));
+        var share = Link("Share yours in the library…", () => OpenInBrowser(Community.ShareUrl(_s.Active)));
+        _tips.SetToolTip(library, "Opens crosshairs shared by other players on GitHub. Copy a code there, paste it below and press Import.");
+        _tips.SetToolTip(share, "Opens a form on GitHub with this crosshair's name and share code filled in (needs a free GitHub account)");
+        var links = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.TopDown, Padding = new Padding(0, 6, 0, 0) };
+        links.Controls.AddRange([library, share]);
+
         var panel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 10, 0) };
         panel.Controls.Add(_list);
         panel.Controls.Add(presets);
         panel.Controls.Add(buttons);
+        panel.Controls.Add(links);
         panel.Controls.Add(Heading("Your crosshairs"));
         _tips.SetToolTip(_list, "Click one to use it. Switch while playing with Ctrl+Alt+N.");
         return panel;
@@ -557,6 +565,22 @@ internal sealed class DesignerForm : Form
         var b = new Button { Text = text, AutoSize = true, Padding = new Padding(6, 2, 6, 2) };
         b.Click += (_, _) => onClick();
         return b;
+    }
+
+    private static LinkLabel Link(string text, Action onClick)
+    {
+        var link = new LinkLabel { Text = text, AutoSize = true, Margin = new Padding(0, 2, 0, 2) };
+        link.LinkClicked += (_, _) => onClick();
+        return link;
+    }
+
+    private void OpenInBrowser(string url)
+    {
+        try { Community.Open(url); }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            MessageBox.Show(this, "Your web browser couldn't be opened. The address is:\n\n" + url, Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
     }
 
     // ---- behavior --------------------------------------------------------------------------------
